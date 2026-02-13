@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
         groupRate: number;
         individualTotal: number;
         groupTotal: number;
+        methodistBonus: number;
         total: number;
         details: {
           day: number;
@@ -84,6 +85,7 @@ export async function GET(request: NextRequest) {
           groupRate: teacher.groupRate,
           individualTotal: 0,
           groupTotal: 0,
+          methodistBonus: 0,
           total: 0,
           details: [],
         });
@@ -119,6 +121,35 @@ export async function GET(request: NextRequest) {
       });
 
       entry.total = entry.individualTotal + entry.groupTotal;
+    }
+
+    // Добавляем методический бонус для методистов
+    const allTeachers = await prisma.teacher.findMany({
+      where: { isMethodist: true, isActive: true },
+    });
+
+    for (const teacher of allTeachers) {
+      if (teacher.methodistWeeklyRate > 0) {
+        const key = teacher.id;
+        if (!salaryMap.has(key)) {
+          salaryMap.set(key, {
+            teacherId: teacher.id,
+            teacherName: `${teacher.lastName} ${teacher.firstName} ${teacher.patronymic || ""}`.trim(),
+            individualHours: 0,
+            groupHours: 0,
+            individualRate: teacher.individualRate,
+            groupRate: teacher.groupRate,
+            individualTotal: 0,
+            groupTotal: 0,
+            methodistBonus: 0,
+            total: 0,
+            details: [],
+          });
+        }
+        const entry = salaryMap.get(key)!;
+        entry.methodistBonus = teacher.methodistWeeklyRate;
+        entry.total = entry.individualTotal + entry.groupTotal + entry.methodistBonus;
+      }
     }
 
     const result = Array.from(salaryMap.values()).sort((a, b) =>

@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const weekStart = searchParams.get("weekStart");
     const teacherId = searchParams.get("teacherId");
+    const dayGroup = searchParams.get("dayGroup");
 
     if (!weekStart) {
       return NextResponse.json(
@@ -19,11 +20,24 @@ export async function GET(request: NextRequest) {
     if (teacherId) {
       where.teacherId = teacherId;
     }
+    if (dayGroup === "mwf") {
+      where.dayOfWeek = { in: [1, 3, 5] };
+    } else if (dayGroup === "tt") {
+      where.dayOfWeek = { in: [2, 4] };
+    }
 
     const slots = await prisma.scheduleSlot.findMany({
       where,
       include: {
-        teacher: true,
+        teacher: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            patronymic: true,
+            room: true,
+          },
+        },
         student: true,
         group: {
           include: {
@@ -59,6 +73,8 @@ export async function POST(request: NextRequest) {
       endTime,
       weekStartDate,
       lessonType,
+      lessonCategory,
+      room,
     } = body;
 
     if (!teacherId || !dayOfWeek || !startTime || !endTime || !weekStartDate || !lessonType) {
@@ -175,6 +191,8 @@ export async function POST(request: NextRequest) {
         endTime,
         weekStartDate,
         lessonType,
+        lessonCategory: lessonCategory || null,
+        room: room || null,
       },
       include: {
         teacher: true,

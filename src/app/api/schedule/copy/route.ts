@@ -49,6 +49,8 @@ export async function POST(request: NextRequest) {
         endTime: slot.endTime,
         weekStartDate: toWeek,
         lessonType: slot.lessonType,
+        lessonCategory: slot.lessonCategory,
+        room: slot.room,
       })),
     });
 

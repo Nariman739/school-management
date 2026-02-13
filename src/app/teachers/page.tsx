@@ -21,6 +21,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import {
   Card,
   CardContent,
   CardHeader,
@@ -36,6 +44,10 @@ interface Teacher {
   phone: string | null;
   individualRate: number;
   groupRate: number;
+  room?: string;
+  specialization?: string;
+  isMethodist?: boolean;
+  methodistWeeklyRate?: number;
   isActive: boolean;
 }
 
@@ -46,6 +58,10 @@ interface TeacherFormData {
   phone: string;
   individualRate: string;
   groupRate: string;
+  room: string;
+  specialization: string;
+  isMethodist: boolean;
+  methodistWeeklyRate: string;
 }
 
 const emptyForm: TeacherFormData = {
@@ -55,6 +71,10 @@ const emptyForm: TeacherFormData = {
   phone: "",
   individualRate: "0",
   groupRate: "0",
+  room: "",
+  specialization: "",
+  isMethodist: false,
+  methodistWeeklyRate: "0",
 };
 
 function formatRate(value: number): string {
@@ -106,6 +126,10 @@ export default function TeachersPage() {
       phone: teacher.phone ?? "",
       individualRate: String(teacher.individualRate),
       groupRate: String(teacher.groupRate),
+      room: teacher.room ?? "",
+      specialization: teacher.specialization ?? "",
+      isMethodist: teacher.isMethodist ?? false,
+      methodistWeeklyRate: String(teacher.methodistWeeklyRate ?? 0),
     });
     setDialogOpen(true);
   }
@@ -127,6 +151,12 @@ export default function TeachersPage() {
         phone: formData.phone.trim() || null,
         individualRate: parseInt(formData.individualRate, 10) || 0,
         groupRate: parseInt(formData.groupRate, 10) || 0,
+        room: formData.room.trim() || null,
+        specialization: formData.specialization || null,
+        isMethodist: formData.isMethodist,
+        methodistWeeklyRate: formData.isMethodist
+          ? parseInt(formData.methodistWeeklyRate, 10) || 0
+          : 0,
       };
 
       const url = editingTeacher
@@ -226,6 +256,7 @@ export default function TeachersPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>ФИО</TableHead>
+                  <TableHead>Кабинет</TableHead>
                   <TableHead>Телефон</TableHead>
                   <TableHead className="text-right">Ставка инд.</TableHead>
                   <TableHead className="text-right">Ставка групп.</TableHead>
@@ -236,8 +267,14 @@ export default function TeachersPage() {
                 {teachers.map((teacher) => (
                   <TableRow key={teacher.id}>
                     <TableCell className="font-medium">
-                      {getFullName(teacher)}
+                      <span className="flex items-center gap-2">
+                        {getFullName(teacher)}
+                        {teacher.isMethodist && (
+                          <Badge variant="secondary">М</Badge>
+                        )}
+                      </span>
                     </TableCell>
+                    <TableCell>{teacher.room ?? "\u2014"}</TableCell>
                     <TableCell>{teacher.phone ?? "\u2014"}</TableCell>
                     <TableCell className="text-right">
                       {formatRate(teacher.individualRate)}
@@ -393,6 +430,87 @@ export default function TeachersPage() {
                   }
                 />
               </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="room" className="text-right">
+                  Кабинет
+                </Label>
+                <Input
+                  id="room"
+                  className="col-span-3"
+                  value={formData.room}
+                  onChange={(e) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      room: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="specialization" className="text-right">
+                  Специализация
+                </Label>
+                <div className="col-span-3">
+                  <Select
+                    value={formData.specialization}
+                    onValueChange={(value) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        specialization: value === "__none__" ? "" : value,
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Не указана" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Не указана</SelectItem>
+                      <SelectItem value="И">И (Интенсив)</SelectItem>
+                      <SelectItem value="А">А (Академ)</SelectItem>
+                      <SelectItem value="Тех">Тех (Технология)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="isMethodist" className="text-right">
+                  Методист
+                </Label>
+                <div className="col-span-3 flex items-center">
+                  <input
+                    id="isMethodist"
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300"
+                    checked={formData.isMethodist}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        isMethodist: e.target.checked,
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              {formData.isMethodist && (
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="methodistWeeklyRate" className="text-right">
+                    Ставка методиста (\u20B8/нед)
+                  </Label>
+                  <Input
+                    id="methodistWeeklyRate"
+                    className="col-span-3"
+                    type="number"
+                    min="0"
+                    value={formData.methodistWeeklyRate}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        methodistWeeklyRate: e.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button

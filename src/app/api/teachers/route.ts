@@ -22,8 +22,18 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const { lastName, firstName, patronymic, phone, individualRate, groupRate } =
-      body;
+    const {
+      lastName,
+      firstName,
+      patronymic,
+      phone,
+      individualRate,
+      groupRate,
+      room,
+      specialization,
+      isMethodist,
+      methodistWeeklyRate,
+    } = body;
 
     if (!lastName || !firstName) {
       return NextResponse.json(
@@ -40,6 +50,12 @@ export async function POST(request: NextRequest) {
         phone: phone || null,
         individualRate: individualRate ? parseInt(String(individualRate), 10) : 0,
         groupRate: groupRate ? parseInt(String(groupRate), 10) : 0,
+        room: room || null,
+        specialization: specialization || null,
+        isMethodist: Boolean(isMethodist),
+        methodistWeeklyRate: methodistWeeklyRate
+          ? parseInt(String(methodistWeeklyRate), 10)
+          : 0,
       },
     });
 

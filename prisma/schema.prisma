@@ -13,9 +13,13 @@ model Teacher {
   firstName      String
   patronymic     String?
   phone          String?
-  individualRate Int      @default(0) // тенге/час за индивидуальное занятие
-  groupRate      Int      @default(0) // тенге/час за групповое занятие
-  isActive       Boolean  @default(true)
+  individualRate      Int      @default(0) // тенге/час за индивидуальное занятие
+  groupRate           Int      @default(0) // тенге/час за групповое занятие
+  room                String?  // кабинет по умолчанию ("Каб.1", "Спортзал")
+  specialization      String?  // "И" (интенсив), "А" (академ), etc.
+  isMethodist         Boolean  @default(false)
+  methodistWeeklyRate Int      @default(0) // недельная ставка методиста (5000₸)
+  isActive            Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -43,6 +47,7 @@ model Student {
 model Group {
   id        String   @id @default(uuid())
   name      String // М0, М1, ГРМ1 и т.д.
+  groupType String? // "ГРМ", "М0", "М1", "ГР Реч", "ОНР", "АФК", "ЛФК"
   teacherId String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -71,8 +76,10 @@ model ScheduleSlot {
   dayOfWeek     Int // 1=Пн, 2=Вт, 3=Ср, 4=Чт, 5=Пт, 6=Сб, 7=Вс
   startTime     String // "09:00"
   endTime       String // "10:00"
-  weekStartDate String // "2025-01-20" — понедельник недели
-  lessonType    String // "INDIVIDUAL" | "GROUP"
+  weekStartDate  String // "2025-01-20" — понедельник недели
+  lessonType     String // "INDIVIDUAL" | "GROUP"
+  lessonCategory String? // "А", "И", "Тех", "СОПР", "Метод"
+  room           String? // кабинет для этого занятия
 
   teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   student     Student?     @relation(fields: [studentId], references: [id], onDelete: SetNull)

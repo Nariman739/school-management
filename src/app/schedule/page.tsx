@@ -17,8 +17,9 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import {
-  DAYS_OF_WEEK,
   TIME_SLOTS,
+  DAY_GROUPS,
+  LESSON_CATEGORIES,
   getMonday,
   addWeeks,
   formatWeekRange,
@@ -30,6 +31,7 @@ interface Teacher {
   lastName: string;
   firstName: string;
   patronymic: string | null;
+  room?: string | null;
 }
 
 interface Student {
@@ -60,38 +62,72 @@ interface ScheduleSlot {
   endTime: string;
   weekStartDate: string;
   lessonType: string;
+  lessonCategory: string | null;
+  room: string | null;
   teacher: Teacher;
   student: Student | null;
   group: (Group & { members: GroupMember[] }) | null;
 }
 
+// Цвета по типу занятия
+function getCellStyle(slot: ScheduleSlot): string {
+  const cat = slot.lessonCategory;
+  if (cat === "Метод") return "bg-gray-200 text-gray-700";
+  if (cat === "СОПР") return "bg-purple-100 text-purple-800";
+  if (slot.lessonType === "GROUP") return "bg-green-100 text-green-800";
+  if (cat === "И") return "bg-blue-100 text-blue-800";
+  if (cat === "А") return "bg-amber-100 text-amber-800";
+  if (cat === "Тех") return "bg-cyan-100 text-cyan-800";
+  return "bg-blue-50 text-blue-800";
+}
+
+function getSlotLabel(slot: ScheduleSlot): string {
+  if (slot.lessonCategory === "Метод") return "метод";
+  if (slot.lessonType === "GROUP" && slot.group) {
+    return `гр${slot.group.name}`;
+  }
+  if (slot.lessonType === "INDIVIDUAL" && slot.student) {
+    const suffix = slot.lessonCategory ? ` ${slot.lessonCategory}` : "";
+    return `${slot.student.lastName}${suffix}`;
+  }
+  return "—";
+}
+
 export default function SchedulePage() {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date()));
-  const [selectedTeacher, setSelectedTeacher] = useState<string>("all");
+  const [activeDayGroup, setActiveDayGroup] = useState("mwf");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Диалог добавления
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [selectedDay, setSelectedDay] = useState(1);
+  const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [selectedTime, setSelectedTime] = useState("09:00");
-  const [formTeacher, setFormTeacher] = useState("");
   const [formType, setFormType] = useState<"INDIVIDUAL" | "GROUP">("INDIVIDUAL");
   const [formStudent, setFormStudent] = useState("");
   const [formGroup, setFormGroup] = useState("");
+  const [formCategory, setFormCategory] = useState("");
+  const [formRoom, setFormRoom] = useState("");
   const [error, setError] = useState("");
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
 
+  const currentDayGroup = DAY_GROUPS.find((dg) => dg.id === activeDayGroup)!;
+
   const fetchSlots = useCallback(async () => {
-    const params = new URLSearchParams({ weekStart });
-    if (selectedTeacher !== "all") {
-      params.set("teacherId", selectedTeacher);
-    }
+    setLoading(true);
+    const params = new URLSearchParams({
+      weekStart,
+      dayGroup: activeDayGroup,
+    });
     const res = await fetch(`/api/schedule?${params}`);
     if (res.ok) {
       setSlots(await res.json());
     }
-  }, [weekStart, selectedTeacher]);
+    setLoading(false);
+  }, [weekStart, activeDayGroup]);
 
   useEffect(() => {
     fetchSlots();
@@ -109,43 +145,79 @@ export default function SchedulePage() {
     });
   }, []);
 
-  const openAddDialog = (day: number, time: string) => {
-    setSelectedDay(day);
+  // Учителя, у которых есть слоты на этой неделе в текущей группе дней
+  const activeTeachers = teachers.filter((t) =>
+    slots.some((s) => s.teacherId === t.id)
+  );
+
+  // Если нет слотов — показать всех учителей
+  const displayTeachers = activeTeachers.length > 0 ? activeTeachers : teachers;
+
+  // Получить слот для ячейки
+  const getSlotForCell = (teacherId: string, time: string): ScheduleSlot | undefined => {
+    return slots.find(
+      (s) => s.teacherId === teacherId && s.startTime === time
+    );
+  };
+
+  const openAddDialog = (teacherId: string, time: string) => {
+    setSelectedTeacherId(teacherId);
     setSelectedTime(time);
-    setFormTeacher(selectedTeacher !== "all" ? selectedTeacher : "");
     setFormType("INDIVIDUAL");
     setFormStudent("");
     setFormGroup("");
+    setFormCategory("");
+    const teacher = teachers.find((t) => t.id === teacherId);
+    setFormRoom(teacher?.room ?? "");
     setError("");
     setDialogOpen(true);
   };
 
   const handleAddSlot = async () => {
     setError("");
-    const body: Record<string, unknown> = {
-      teacherId: formTeacher,
-      dayOfWeek: selectedDay,
-      startTime: selectedTime,
-      endTime: getEndTime(selectedTime),
-      weekStartDate: weekStart,
-      lessonType: formType,
-    };
+    // Для каждого дня в группе создаём слот
+    const days = currentDayGroup.days;
+    let lastError = "";
+    let created = 0;
 
-    if (formType === "INDIVIDUAL") {
-      body.studentId = formStudent;
-    } else {
-      body.groupId = formGroup;
+    for (const dayOfWeek of days) {
+      const body: Record<string, unknown> = {
+        teacherId: selectedTeacherId,
+        dayOfWeek,
+        startTime: selectedTime,
+        endTime: getEndTime(selectedTime),
+        weekStartDate: weekStart,
+        lessonType: formType,
+        lessonCategory: (formCategory && formCategory !== "__none__") ? formCategory : null,
+        room: formRoom || null,
+      };
+
+      if (formType === "INDIVIDUAL") {
+        if (formCategory === "Метод") {
+          // Метод-слот без ученика
+        } else {
+          body.studentId = formStudent;
+        }
+      } else {
+        body.groupId = formGroup;
+      }
+
+      const res = await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        lastError = data.error || "Ошибка при создании";
+      } else {
+        created++;
+      }
     }
 
-    const res = await fetch("/api/schedule", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const data = await res.json();
-      setError(data.error || "Ошибка при создании");
+    if (created === 0) {
+      setError(lastError);
       return;
     }
 
@@ -178,32 +250,17 @@ export default function SchedulePage() {
     setCopyDialogOpen(false);
   };
 
-  const getSlotForCell = (day: number, time: string): ScheduleSlot[] => {
-    return slots.filter((s) => s.dayOfWeek === day && s.startTime === time);
-  };
-
-  const getSlotLabel = (slot: ScheduleSlot): string => {
-    if (slot.lessonType === "INDIVIDUAL" && slot.student) {
-      return `${slot.student.lastName} ${slot.student.firstName[0]}.`;
-    }
-    if (slot.lessonType === "GROUP" && slot.group) {
-      return `гр. ${slot.group.name}`;
-    }
-    return "—";
-  };
-
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      {/* Заголовок */}
+      <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Расписание</h1>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setCopyDialogOpen(true)}>
-            Копировать с пред. недели
-          </Button>
-        </div>
+        <Button variant="outline" onClick={() => setCopyDialogOpen(true)}>
+          Копировать с пред. недели
+        </Button>
       </div>
 
-      {/* Фильтры */}
+      {/* Навигация по неделям */}
       <div className="mb-4 flex items-center gap-4">
         <div className="flex items-center gap-2">
           <Button
@@ -211,7 +268,7 @@ export default function SchedulePage() {
             size="sm"
             onClick={() => setWeekStart(addWeeks(weekStart, -1))}
           >
-            ←
+            &larr;
           </Button>
           <span className="min-w-[160px] text-center font-medium">
             {formatWeekRange(weekStart)}
@@ -221,109 +278,107 @@ export default function SchedulePage() {
             size="sm"
             onClick={() => setWeekStart(addWeeks(weekStart, 1))}
           >
-            →
+            &rarr;
           </Button>
         </div>
-
-        <Select value={selectedTeacher} onValueChange={setSelectedTeacher}>
-          <SelectTrigger className="w-[250px]">
-            <SelectValue placeholder="Все учителя" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Все учителя</SelectItem>
-            {teachers.map((t) => (
-              <SelectItem key={t.id} value={t.id}>
-                {t.lastName} {t.firstName} {t.patronymic || ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
-      {/* Сетка расписания */}
-      <div className="overflow-x-auto rounded-lg border bg-white">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              <th className="border-b border-r bg-gray-50 p-2 text-left text-sm font-medium text-gray-500">
-                Время
-              </th>
-              {DAYS_OF_WEEK.slice(0, 7).map((day) => (
-                <th
-                  key={day.value}
-                  className="border-b border-r bg-gray-50 p-2 text-center text-sm font-medium text-gray-500"
-                >
-                  {day.full}
+      {/* Табы дней */}
+      <div className="mb-4 flex gap-1">
+        {DAY_GROUPS.map((dg) => (
+          <button
+            key={dg.id}
+            onClick={() => setActiveDayGroup(dg.id)}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              activeDayGroup === dg.id
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+          >
+            {dg.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Сетка расписания: учителя-колонки, время-строки */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <p className="text-muted-foreground">Загрузка...</p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border bg-white">
+          <table className="border-collapse">
+            <thead>
+              <tr>
+                <th className="sticky left-0 z-10 border-b border-r bg-gray-50 p-2 text-left text-xs font-medium text-gray-500" style={{ minWidth: 60 }}>
+                  Время
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {TIME_SLOTS.map((time) => (
-              <tr key={time}>
-                <td className="border-b border-r p-2 text-sm font-medium text-gray-500">
-                  {time}
-                </td>
-                {DAYS_OF_WEEK.slice(0, 7).map((day) => {
-                  const cellSlots = getSlotForCell(day.value, time);
-                  return (
-                    <td
-                      key={day.value}
-                      className="border-b border-r p-1 align-top"
-                      style={{ minWidth: 120, minHeight: 50 }}
-                    >
-                      {cellSlots.map((slot) => (
-                        <div
-                          key={slot.id}
-                          className={`mb-1 cursor-pointer rounded px-2 py-1 text-xs ${
-                            slot.lessonType === "INDIVIDUAL"
-                              ? "bg-blue-100 text-blue-800"
-                              : "bg-green-100 text-green-800"
-                          }`}
-                          onClick={() => handleDeleteSlot(slot.id)}
-                          title="Нажмите, чтобы удалить"
-                        >
-                          <div className="font-medium">{getSlotLabel(slot)}</div>
-                          {selectedTeacher === "all" && (
-                            <div className="text-[10px] opacity-70">
-                              {slot.teacher.lastName}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                      {cellSlots.length === 0 && (
-                        <button
-                          className="flex h-10 w-full items-center justify-center rounded border border-dashed border-gray-200 text-gray-300 hover:border-gray-400 hover:text-gray-500"
-                          onClick={() => openAddDialog(day.value, time)}
-                        >
-                          +
-                        </button>
-                      )}
-                      {cellSlots.length > 0 && (
-                        <button
-                          className="mt-1 flex w-full items-center justify-center rounded text-xs text-gray-300 hover:text-gray-500"
-                          onClick={() => openAddDialog(day.value, time)}
-                        >
-                          +
-                        </button>
-                      )}
-                    </td>
-                  );
-                })}
+                {displayTeachers.map((teacher) => (
+                  <th
+                    key={teacher.id}
+                    className="border-b border-r bg-gray-50 p-2 text-center text-xs font-medium text-gray-700"
+                    style={{ minWidth: 110 }}
+                  >
+                    <div>{teacher.firstName} {teacher.lastName[0]}.</div>
+                    {teacher.room && (
+                      <div className="text-[10px] font-normal text-gray-400">
+                        {teacher.room}
+                      </div>
+                    )}
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {TIME_SLOTS.map((time) => (
+                <tr key={time}>
+                  <td className="sticky left-0 z-10 border-b border-r bg-white p-2 text-xs font-medium text-gray-500">
+                    {time}
+                  </td>
+                  {displayTeachers.map((teacher) => {
+                    const slot = getSlotForCell(teacher.id, time);
+                    return (
+                      <td
+                        key={teacher.id}
+                        className="border-b border-r p-1 align-top"
+                        style={{ minWidth: 110, height: 44 }}
+                      >
+                        {slot ? (
+                          <div
+                            className={`cursor-pointer rounded px-2 py-1 text-xs ${getCellStyle(slot)}`}
+                            onClick={() => handleDeleteSlot(slot.id)}
+                            title={`${getSlotLabel(slot)}${slot.room ? ` | ${slot.room}` : ""}\nНажмите для удаления`}
+                          >
+                            <div className="font-medium truncate">
+                              {getSlotLabel(slot)}
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            className="flex h-full w-full min-h-[32px] items-center justify-center rounded border border-dashed border-gray-200 text-gray-300 hover:border-gray-400 hover:text-gray-500 text-xs"
+                            onClick={() => openAddDialog(teacher.id, time)}
+                          >
+                            +
+                          </button>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Легенда */}
-      <div className="mt-4 flex items-center gap-4">
-        <Badge variant="secondary" className="bg-blue-100 text-blue-800">
-          Индивидуальное
-        </Badge>
-        <Badge variant="secondary" className="bg-green-100 text-green-800">
-          Групповое
-        </Badge>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Badge variant="secondary" className="bg-blue-100 text-blue-800">И — Интенсив</Badge>
+        <Badge variant="secondary" className="bg-amber-100 text-amber-800">А — Академические</Badge>
+        <Badge variant="secondary" className="bg-cyan-100 text-cyan-800">Тех — Технология</Badge>
+        <Badge variant="secondary" className="bg-green-100 text-green-800">Группа</Badge>
+        <Badge variant="secondary" className="bg-purple-100 text-purple-800">СОПР</Badge>
+        <Badge variant="secondary" className="bg-gray-200 text-gray-700">Метод</Badge>
       </div>
 
       {/* Диалог добавления слота */}
@@ -331,9 +386,10 @@ export default function SchedulePage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Добавить занятие —{" "}
-              {DAYS_OF_WEEK.find((d) => d.value === selectedDay)?.full},{" "}
-              {selectedTime}
+              Добавить занятие — {selectedTime}
+              <span className="ml-2 text-sm font-normal text-gray-500">
+                ({currentDayGroup.label})
+              </span>
             </DialogTitle>
           </DialogHeader>
 
@@ -344,77 +400,95 @@ export default function SchedulePage() {
               </div>
             )}
 
+            {/* Категория занятия */}
             <div>
-              <label className="mb-1 block text-sm font-medium">Учитель</label>
-              <Select value={formTeacher} onValueChange={setFormTeacher}>
+              <label className="mb-1 block text-sm font-medium">Категория</label>
+              <Select value={formCategory} onValueChange={setFormCategory}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Выберите учителя" />
+                  <SelectValue placeholder="Выберите категорию" />
                 </SelectTrigger>
                 <SelectContent>
-                  {teachers.map((t) => (
-                    <SelectItem key={t.id} value={t.id}>
-                      {t.lastName} {t.firstName}
+                  <SelectItem value="__none__">Без категории</SelectItem>
+                  {LESSON_CATEGORIES.map((cat) => (
+                    <SelectItem key={cat.value} value={cat.value}>
+                      {cat.value} — {cat.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
-            <div>
-              <label className="mb-1 block text-sm font-medium">Тип занятия</label>
-              <Select
-                value={formType}
-                onValueChange={(v) => setFormType(v as "INDIVIDUAL" | "GROUP")}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="INDIVIDUAL">Индивидуальное</SelectItem>
-                  <SelectItem value="GROUP">Групповое</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {/* Тип занятия (если не Метод) */}
+            {formCategory !== "Метод" && (
+              <>
+                <div>
+                  <label className="mb-1 block text-sm font-medium">Тип занятия</label>
+                  <Select
+                    value={formType}
+                    onValueChange={(v) => setFormType(v as "INDIVIDUAL" | "GROUP")}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="INDIVIDUAL">Индивидуальное</SelectItem>
+                      <SelectItem value="GROUP">Групповое</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            {formType === "INDIVIDUAL" ? (
-              <div>
-                <label className="mb-1 block text-sm font-medium">Ученик</label>
-                <Select value={formStudent} onValueChange={setFormStudent}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Выберите ученика" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {students.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.lastName} {s.firstName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            ) : (
-              <div>
-                <label className="mb-1 block text-sm font-medium">Группа</label>
-                <Select value={formGroup} onValueChange={setFormGroup}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Выберите группу" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {groups.map((g) => (
-                      <SelectItem key={g.id} value={g.id}>
-                        {g.name} ({g.members?.length || 0} уч.)
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                {formType === "INDIVIDUAL" ? (
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">Ученик</label>
+                    <Select value={formStudent} onValueChange={setFormStudent}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Выберите ученика" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {students.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.lastName} {s.firstName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">Группа</label>
+                    <Select value={formGroup} onValueChange={setFormGroup}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Выберите группу" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {groups.map((g) => (
+                          <SelectItem key={g.id} value={g.id}>
+                            {g.name} ({g.members?.length || 0} уч.)
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </>
             )}
+
+            {/* Кабинет */}
+            <div>
+              <label className="mb-1 block text-sm font-medium">Кабинет</label>
+              <input
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                value={formRoom}
+                onChange={(e) => setFormRoom(e.target.value)}
+                placeholder="Каб.1"
+              />
+            </div>
 
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>
                 Отмена
               </Button>
-              <Button onClick={handleAddSlot} disabled={!formTeacher}>
+              <Button onClick={handleAddSlot}>
                 Добавить
               </Button>
             </div>

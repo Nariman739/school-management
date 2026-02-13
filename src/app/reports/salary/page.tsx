@@ -32,6 +32,7 @@ interface SalaryEntry {
   groupRate: number;
   individualTotal: number;
   groupTotal: number;
+  methodistBonus: number;
   total: number;
   details: SalaryDetail[];
 }
@@ -115,6 +116,11 @@ export default function SalaryReportPage() {
                       Груп: {entry.groupHours}ч × {entry.groupRate.toLocaleString()} ₸ ={" "}
                       {entry.groupTotal.toLocaleString()} ₸
                     </span>
+                    {entry.methodistBonus > 0 && (
+                      <span className="text-gray-600">
+                        Метод: {entry.methodistBonus.toLocaleString()} ₸
+                      </span>
+                    )}
                     <span className="text-lg font-bold">
                       {entry.total.toLocaleString()} ₸
                     </span>

@@ -17,6 +17,8 @@ export async function PUT(
       startTime,
       endTime,
       lessonType,
+      lessonCategory,
+      room,
     } = body;
 
     const existing = await prisma.scheduleSlot.findUnique({ where: { id } });
@@ -33,6 +35,8 @@ export async function PUT(
     const finalStudentId = studentId !== undefined ? studentId : existing.studentId;
     const finalGroupId = groupId !== undefined ? groupId : existing.groupId;
     const finalLessonType = lessonType ?? existing.lessonType;
+    const finalLessonCategory = lessonCategory !== undefined ? lessonCategory : existing.lessonCategory;
+    const finalRoom = room !== undefined ? room : existing.room;
 
     // Валидация: учитель не занят в это время (кроме текущего слота)
     const teacherConflict = await prisma.scheduleSlot.findFirst({
@@ -82,6 +86,8 @@ export async function PUT(
         startTime: finalStartTime,
         endTime: endTime ?? existing.endTime,
         lessonType: finalLessonType,
+        lessonCategory: finalLessonCategory || null,
+        room: finalRoom || null,
       },
       include: {
         teacher: true,

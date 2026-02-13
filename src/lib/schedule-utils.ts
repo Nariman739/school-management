@@ -11,9 +11,21 @@ export const DAYS_OF_WEEK = [
 ];
 
 export const TIME_SLOTS = [
-  "08:00", "09:00", "10:00", "11:00", "12:00",
-  "13:00", "14:00", "15:00", "16:00", "17:00",
-  "18:00", "19:00", "20:00",
+  "09:00", "10:00", "11:00", "12:00", "13:00",
+  "14:00", "15:00", "16:00", "17:00", "18:00",
+];
+
+export const LESSON_CATEGORIES = [
+  { value: "А", label: "Академические" },
+  { value: "И", label: "Интенсив" },
+  { value: "Тех", label: "Технология" },
+  { value: "СОПР", label: "Сопровождение" },
+  { value: "Метод", label: "Методический час" },
+];
+
+export const DAY_GROUPS = [
+  { id: "mwf", label: "Пн / Ср / Пт", days: [1, 3, 5] },
+  { id: "tt", label: "Вт / Чт", days: [2, 4] },
 ];
 
 export function getMonday(date: Date): string {

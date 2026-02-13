@@ -1,5 +1,5 @@
 // Seed script — заливка данных из Excel
-const BASE = "http://localhost:3000/api";
+const BASE = process.env.SEED_URL || "https://school-management-v7xh.vercel.app/api";
 
 async function post(path, data) {
   const res = await fetch(`${BASE}${path}`, {
