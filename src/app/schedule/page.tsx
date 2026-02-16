@@ -25,6 +25,7 @@ import {
   formatWeekRange,
   getEndTime,
 } from "@/lib/schedule-utils";
+import type { ImportPreview } from "@/lib/import-utils";
 
 interface Teacher {
   id: string;
@@ -113,6 +114,14 @@ export default function SchedulePage() {
   const [formRoom, setFormRoom] = useState("");
   const [error, setError] = useState("");
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+
+  // Импорт из Google Sheets
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importStage, setImportStage] = useState<"input" | "preview">("input");
 
   const currentDayGroup = DAY_GROUPS.find((dg) => dg.id === activeDayGroup)!;
 
@@ -250,14 +259,84 @@ export default function SchedulePage() {
     setCopyDialogOpen(false);
   };
 
+  const openImportDialog = () => {
+    setImportUrl("");
+    setImportPreview(null);
+    setImportError("");
+    setImportStage("input");
+    setImportDialogOpen(true);
+  };
+
+  const handleLoadPreview = async () => {
+    setImportLoading(true);
+    setImportError("");
+
+    try {
+      const res = await fetch("/api/schedule/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: importUrl, weekStart, preview: true }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setImportError(data.error || "Ошибка загрузки");
+        setImportLoading(false);
+        return;
+      }
+
+      setImportPreview(data as ImportPreview);
+      setImportStage("preview");
+    } catch {
+      setImportError("Ошибка сети");
+    }
+    setImportLoading(false);
+  };
+
+  const handleConfirmImport = async () => {
+    setImportLoading(true);
+    setImportError("");
+
+    try {
+      const res = await fetch("/api/schedule/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetUrl: importUrl, weekStart, preview: false }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setImportError(data.error || "Ошибка импорта");
+        setImportLoading(false);
+        return;
+      }
+
+      const msg = `Импортировано ${data.count} из ${data.total} занятий`;
+      const errMsg = data.errors?.length
+        ? `\n\nПропущено:\n${data.errors.join("\n")}`
+        : "";
+      alert(msg + errMsg);
+      setImportDialogOpen(false);
+      fetchSlots();
+    } catch {
+      setImportError("Ошибка сети");
+    }
+    setImportLoading(false);
+  };
+
   return (
     <div>
       {/* Заголовок */}
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">Расписание</h1>
-        <Button variant="outline" onClick={() => setCopyDialogOpen(true)}>
-          Копировать с пред. недели
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={openImportDialog}>
+            Импорт из Google Sheets
+          </Button>
+          <Button variant="outline" onClick={() => setCopyDialogOpen(true)}>
+            Копировать с пред. недели
+          </Button>
+        </div>
       </div>
 
       {/* Навигация по неделям */}
@@ -513,6 +592,146 @@ export default function SchedulePage() {
             </Button>
             <Button onClick={handleCopyWeek}>Копировать</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог импорта из Google Sheets */}
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Импорт из Google Sheets</DialogTitle>
+          </DialogHeader>
+
+          {importError && (
+            <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-600">
+              {importError}
+            </div>
+          )}
+
+          {importStage === "input" && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600">
+                Вставьте ссылку на Google Таблицу. Таблица должна быть открыта для просмотра по ссылке.
+              </p>
+
+              <div className="rounded border bg-gray-50 p-3 text-xs text-gray-500">
+                <p className="mb-1 font-medium">Формат таблицы (столбцы):</p>
+                <p>Учитель | Ученик/Группа | День | Время | Категория | Кабинет</p>
+                <p className="mt-1">Пример: Иванов | Петров Алексей | Пн | 09:00 | И | 101</p>
+                <p>Группа: Иванов | Группа М1 | Вт | 10:00 | А | 102</p>
+                <p>Метод: Сидорова | метод | Пт | 14:00 | Метод |</p>
+              </div>
+
+              <input
+                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                value={importUrl}
+                onChange={(e) => setImportUrl(e.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+              />
+
+              <p className="text-xs text-gray-400">
+                Данные будут импортированы на неделю: <strong>{formatWeekRange(weekStart)}</strong>
+              </p>
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setImportDialogOpen(false)}>
+                  Отмена
+                </Button>
+                <Button onClick={handleLoadPreview} disabled={!importUrl.trim() || importLoading}>
+                  {importLoading ? "Загрузка..." : "Загрузить превью"}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {importStage === "preview" && importPreview && (
+            <div className="space-y-4">
+              {/* Сводка */}
+              <div className="flex gap-3">
+                <div className="rounded bg-gray-100 px-3 py-1 text-sm">
+                  Всего: <strong>{importPreview.totalRows}</strong>
+                </div>
+                <div className="rounded bg-green-100 px-3 py-1 text-sm text-green-800">
+                  Валидных: <strong>{importPreview.validRows}</strong>
+                </div>
+                {importPreview.errorRows > 0 && (
+                  <div className="rounded bg-red-100 px-3 py-1 text-sm text-red-800">
+                    Ошибок: <strong>{importPreview.errorRows}</strong>
+                  </div>
+                )}
+              </div>
+
+              {/* Таблица превью */}
+              <div className="max-h-[400px] overflow-auto rounded border">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr>
+                      <th className="border-b p-2 text-left">#</th>
+                      <th className="border-b p-2 text-left">Учитель</th>
+                      <th className="border-b p-2 text-left">Ученик/Группа</th>
+                      <th className="border-b p-2 text-left">День</th>
+                      <th className="border-b p-2 text-left">Время</th>
+                      <th className="border-b p-2 text-left">Кат.</th>
+                      <th className="border-b p-2 text-left">Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importPreview.matches.map((m, i) => (
+                      <tr
+                        key={i}
+                        className={m.errors.length > 0 ? "bg-red-50" : "bg-green-50"}
+                      >
+                        <td className="border-b p-2 text-gray-400">{m.rowIndex}</td>
+                        <td className="border-b p-2">
+                          {m.teacherLabel || (
+                            <span className="text-red-500">{m.row.teacherName}</span>
+                          )}
+                        </td>
+                        <td className="border-b p-2">
+                          {m.studentOrGroupLabel || (
+                            <span className="text-red-500">{m.row.studentOrGroup}</span>
+                          )}
+                        </td>
+                        <td className="border-b p-2">{m.row.day}</td>
+                        <td className="border-b p-2">{m.row.time}</td>
+                        <td className="border-b p-2">{m.row.category}</td>
+                        <td className="border-b p-2">
+                          {m.errors.length > 0 ? (
+                            <span className="text-red-600" title={m.errors.join("\n")}>
+                              {m.errors[0]}
+                            </span>
+                          ) : (
+                            <span className="text-green-600">OK</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setImportStage("input");
+                    setImportPreview(null);
+                    setImportError("");
+                  }}
+                >
+                  Назад
+                </Button>
+                <Button
+                  onClick={handleConfirmImport}
+                  disabled={importPreview.validRows === 0 || importLoading}
+                >
+                  {importLoading
+                    ? "Импорт..."
+                    : `Импортировать ${importPreview.validRows} занятий`}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
