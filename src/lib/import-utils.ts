@@ -1,27 +1,35 @@
-// Утилиты для импорта расписания из Google Sheets
+// Утилиты для импорта расписания из Google Sheets (формат сетки)
+//
+// Формат таблицы:
+//   Строка 1: [пусто/Время] | Учитель1 | Учитель2 | Учитель3 | ...
+//   Строка 2+: 09:00        | Адильулы Аскар И | метод | гр М0 | ...
+//
+// Ячейка: "Фамилия Имя Категория" или "метод" или "гр НазваниеГруппы"
+// Категория (последнее слово): И, А, Тех, СОПР
+// Группа дней (Пн/Ср/Пт или Вт/Чт) выбирается на сайте.
 
 import { TIME_SLOTS } from "./schedule-utils";
 
-export interface ImportRow {
+// --- Типы ---
+
+export interface GridCell {
   teacherName: string;
-  studentOrGroup: string;
-  day: string;
+  cellValue: string; // оригинальное значение ячейки
   time: string;
-  category: string;
-  room: string;
+  rowIndex: number; // строка в таблице
+  colIndex: number; // колонка
 }
 
 export interface MatchedRow {
-  row: ImportRow;
-  rowIndex: number;
+  cell: GridCell;
   teacherId?: string;
   teacherLabel?: string;
   studentId?: string;
   groupId?: string;
   studentOrGroupLabel?: string;
-  dayOfWeek?: number;
   startTime?: string;
   lessonType?: "INDIVIDUAL" | "GROUP";
+  lessonCategory?: string;
   errors: string[];
 }
 
@@ -51,47 +59,20 @@ interface GroupRecord {
   teacherId: string;
 }
 
-// Извлечь ID таблицы из ссылки Google Sheets
+// --- Google Sheets ---
+
 export function extractSheetId(url: string): string | null {
-  // https://docs.google.com/spreadsheets/d/SHEET_ID/edit...
-  // https://docs.google.com/spreadsheets/d/SHEET_ID
   const match = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
 }
 
-// Построить URL для скачивания CSV
 export function buildCsvUrl(sheetId: string, gid?: string): string {
   const base = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`;
   return gid ? `${base}&gid=${gid}` : base;
 }
 
-// Парсинг CSV (поддержка кавычек)
-export function parseCSV(csvData: string): ImportRow[] {
-  const lines = csvData.split(/\r?\n/).filter((line) => line.trim());
-  if (lines.length < 2) return [];
+// --- CSV парсинг ---
 
-  const rows: ImportRow[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseCsvLine(lines[i]);
-    if (values.length < 4) continue;
-
-    const teacherName = values[0]?.trim() || "";
-    const studentOrGroup = values[1]?.trim() || "";
-    const day = values[2]?.trim() || "";
-    const time = values[3]?.trim() || "";
-    const category = values[4]?.trim() || "";
-    const room = values[5]?.trim() || "";
-
-    if (!teacherName && !studentOrGroup && !day && !time) continue;
-
-    rows.push({ teacherName, studentOrGroup, day, time, category, room });
-  }
-
-  return rows;
-}
-
-// Парсинг одной строки CSV с поддержкой кавычек
 function parseCsvLine(line: string): string[] {
   const result: string[] = [];
   let current = "";
@@ -123,36 +104,130 @@ function parseCsvLine(line: string): string[] {
   return result;
 }
 
-// День недели: "Пн" → 1, "Вт" → 2 ...
-const DAY_MAP: Record<string, number> = {
-  пн: 1, понедельник: 1,
-  вт: 2, вторник: 2,
-  ср: 3, среда: 3,
-  чт: 4, четверг: 4,
-  пт: 5, пятница: 5,
-  сб: 6, суббота: 6,
-  вс: 7, воскресенье: 7,
-};
+// Парсинг CSV в сетку (двумерный массив строк)
+export function parseCsvToGrid(csvData: string): string[][] {
+  const lines = csvData.split(/\r?\n/);
+  const grid: string[][] = [];
 
-export function parseDayOfWeek(day: string): number | null {
-  const normalized = day.toLowerCase().trim();
-  return DAY_MAP[normalized] ?? null;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    grid.push(parseCsvLine(line).map((v) => v.trim()));
+  }
+
+  return grid;
 }
 
-// Время: "9:00" → "09:00", валидация
+// --- Парсинг сетки ---
+
+// Время: "9:00" / "09:00" / "9.00" / "09.00" → "09:00"
 export function parseTime(time: string): string | null {
-  const match = time.match(/^(\d{1,2}):(\d{2})$/);
+  // Заменяем точку на двоеточие
+  const normalized = time.replace(".", ":");
+  const match = normalized.match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return null;
 
   const hours = parseInt(match[1], 10);
   const minutes = match[2];
-  const normalized = `${hours.toString().padStart(2, "0")}:${minutes}`;
+  const formatted = `${hours.toString().padStart(2, "0")}:${minutes}`;
 
-  if (!TIME_SLOTS.includes(normalized)) return null;
-  return normalized;
+  if (!TIME_SLOTS.includes(formatted)) return null;
+  return formatted;
 }
 
-// Поиск учителя по имени
+// Извлечь ячейки из сетки → плоский список GridCell
+export function extractGridCells(grid: string[][]): {
+  cells: GridCell[];
+  teacherNames: string[];
+} {
+  if (grid.length < 2) return { cells: [], teacherNames: [] };
+
+  // Строка 1: учителя (начиная с колонки 1)
+  const headerRow = grid[0];
+  const teacherNames: string[] = [];
+  const teacherColMap: { colIndex: number; teacherName: string }[] = [];
+
+  for (let col = 1; col < headerRow.length; col++) {
+    const name = headerRow[col]?.trim();
+    if (name) {
+      teacherNames.push(name);
+      teacherColMap.push({ colIndex: col, teacherName: name });
+    }
+  }
+
+  // Строки 2+: время в колонке 0, ученики в остальных
+  const cells: GridCell[] = [];
+
+  for (let row = 1; row < grid.length; row++) {
+    const rowData = grid[row];
+    const timeRaw = rowData[0]?.trim();
+    if (!timeRaw) continue;
+
+    const time = parseTime(timeRaw);
+    if (!time) continue; // пропускаем строки где не время
+
+    for (const { colIndex, teacherName } of teacherColMap) {
+      const cellValue = rowData[colIndex]?.trim();
+      if (!cellValue) continue; // пустая ячейка — нет занятия
+
+      cells.push({
+        teacherName,
+        cellValue,
+        time,
+        rowIndex: row + 1, // номер строки в таблице (1-based)
+        colIndex: colIndex + 1,
+      });
+    }
+  }
+
+  return { cells, teacherNames };
+}
+
+// --- Категории ---
+
+const CATEGORY_SUFFIXES: Record<string, string> = {
+  и: "И",
+  а: "А",
+  тех: "Тех",
+  сопр: "СОПР",
+};
+
+// Парсинг ячейки: "Адильулы Аскар И" → { name: "Адильулы Аскар", category: "И" }
+// "метод" → { name: "метод", category: "Метод" }
+// "гр М0" → { name: "гр М0", category: null }
+function parseCellValue(cell: string): {
+  name: string;
+  category: string | null;
+} {
+  const trimmed = cell.trim();
+
+  // "метод" → методический час
+  if (trimmed.toLowerCase() === "метод" || trimmed.toLowerCase().startsWith("метод")) {
+    return { name: "метод", category: "Метод" };
+  }
+
+  // группа — не трогаем категорию
+  if (/^(гр|группа)/i.test(trimmed)) {
+    return { name: trimmed, category: null };
+  }
+
+  // Проверяем последнее слово — может это категория
+  const parts = trimmed.split(/\s+/);
+  if (parts.length >= 2) {
+    const lastWord = parts[parts.length - 1].toLowerCase();
+    if (CATEGORY_SUFFIXES[lastWord]) {
+      return {
+        name: parts.slice(0, -1).join(" "),
+        category: CATEGORY_SUFFIXES[lastWord],
+      };
+    }
+  }
+
+  // Без категории
+  return { name: trimmed, category: null };
+}
+
+// --- Матчинг ---
+
 export function matchTeacher(
   name: string,
   teachers: TeacherRecord[]
@@ -173,6 +248,13 @@ export function matchTeacher(
   });
   if (byFullName.length === 1) return byFullName[0];
 
+  // Имя + Отчество (как в скриншоте: "Дарья Алексеевна")
+  const byFirstPatronymic = teachers.filter((t) => {
+    const fp = `${t.firstName} ${t.patronymic || ""}`.toLowerCase().trim();
+    return fp === normalized || fp.startsWith(normalized);
+  });
+  if (byFirstPatronymic.length === 1) return byFirstPatronymic[0];
+
   // Частичное совпадение фамилии
   const byPartial = teachers.filter((t) =>
     t.lastName.toLowerCase().startsWith(normalized)
@@ -182,7 +264,6 @@ export function matchTeacher(
   return null;
 }
 
-// Определить тип и найти ученика или группу
 export function matchStudentOrGroup(
   name: string,
   students: StudentRecord[],
@@ -191,25 +272,26 @@ export function matchStudentOrGroup(
   const normalized = name.toLowerCase().trim();
   if (!normalized) return null;
 
-  // "метод" / "методический" → методический час (без ученика)
+  // "метод"
   if (normalized === "метод" || normalized.startsWith("метод")) {
     return { type: "method", label: "Методический час" };
   }
 
-  // "Группа ..." или "гр..." → группа
+  // "гр М0", "гр МНО", "группа М1" → группа
   const groupMatch = normalized.match(/^(?:группа\s+|гр\.?\s*)(.*)/);
   if (groupMatch) {
     const groupName = groupMatch[1].trim();
-    const found = groups.find((g) =>
-      g.name.toLowerCase() === groupName ||
-      g.name.toLowerCase().includes(groupName)
+    const found = groups.find(
+      (g) =>
+        g.name.toLowerCase() === groupName ||
+        g.name.toLowerCase().includes(groupName)
     );
     return found
       ? { type: "group", id: found.id, label: found.name }
       : null;
   }
 
-  // Иначе — ученик
+  // Ученик: "Фамилия Имя" или "Фамилия"
   // Точное совпадение "Фамилия Имя"
   const byFullName = students.filter((s) => {
     const full = `${s.lastName} ${s.firstName}`.toLowerCase();
@@ -229,6 +311,15 @@ export function matchStudentOrGroup(
     return { type: "student", id: s.id, label: `${s.lastName} ${s.firstName}` };
   }
 
+  // Только имя (админы часто пишут только имя)
+  const byFirstName = students.filter(
+    (s) => s.firstName.toLowerCase() === normalized
+  );
+  if (byFirstName.length === 1) {
+    const s = byFirstName[0];
+    return { type: "student", id: s.id, label: `${s.lastName} ${s.firstName}` };
+  }
+
   // Частичное совпадение
   const byPartial = students.filter((s) => {
     const full = `${s.lastName} ${s.firstName}`.toLowerCase();
@@ -242,97 +333,81 @@ export function matchStudentOrGroup(
   return null;
 }
 
-// Категория: нормализация
-const CATEGORY_MAP: Record<string, string> = {
-  а: "А", акад: "А", академические: "А",
-  и: "И", интенсив: "И",
-  тех: "Тех", технология: "Тех",
-  сопр: "СОПР", сопровождение: "СОПР",
-  метод: "Метод", методический: "Метод",
-};
-
 export function parseCategory(cat: string): string | null {
   if (!cat.trim()) return null;
-  const normalized = cat.toLowerCase().trim();
-  return CATEGORY_MAP[normalized] ?? null;
+  const map: Record<string, string> = {
+    а: "А", и: "И", тех: "Тех", сопр: "СОПР", метод: "Метод",
+  };
+  return map[cat.toLowerCase().trim()] ?? null;
 }
 
-// Основная функция: матчинг всех строк
-export function matchAllRows(
-  rows: ImportRow[],
+// --- Главная функция: матчинг сетки ---
+
+export function matchGrid(
+  grid: string[][],
   teachers: TeacherRecord[],
   students: StudentRecord[],
   groups: GroupRecord[]
 ): ImportPreview {
+  const { cells } = extractGridCells(grid);
   const matches: MatchedRow[] = [];
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  for (const cell of cells) {
     const errors: string[] = [];
 
-    // Учитель
-    const teacher = matchTeacher(row.teacherName, teachers);
+    // Матчим учителя
+    const teacher = matchTeacher(cell.teacherName, teachers);
     const teacherId = teacher?.id;
     const teacherLabel = teacher
       ? `${teacher.lastName} ${teacher.firstName}`
       : undefined;
     if (!teacher) {
-      errors.push(`Учитель не найден: "${row.teacherName}"`);
-    }
-
-    // День
-    const dayOfWeek = parseDayOfWeek(row.day);
-    if (dayOfWeek === null) {
-      errors.push(`Неверный день: "${row.day}"`);
+      errors.push(`Учитель не найден: "${cell.teacherName}"`);
     }
 
     // Время
-    const startTime = parseTime(row.time);
-    if (startTime === null) {
-      errors.push(`Неверное время: "${row.time}" (допустимо: ${TIME_SLOTS.join(", ")})`);
+    const startTime = parseTime(cell.time);
+    if (!startTime) {
+      errors.push(`Неверное время: "${cell.time}"`);
     }
 
-    // Ученик/Группа
-    const match = matchStudentOrGroup(row.studentOrGroup, students, groups);
+    // Парсим содержимое ячейки
+    const { name, category } = parseCellValue(cell.cellValue);
+
+    // Матчим ученика/группу
+    const match = matchStudentOrGroup(name, students, groups);
     let studentId: string | undefined;
     let groupId: string | undefined;
     let lessonType: "INDIVIDUAL" | "GROUP" | undefined;
     let studentOrGroupLabel: string | undefined;
+    let lessonCategory = category;
 
     if (!match) {
-      errors.push(`Ученик/группа не найдены: "${row.studentOrGroup}"`);
+      errors.push(`Не найден: "${cell.cellValue}"`);
     } else if (match.type === "method") {
       lessonType = "INDIVIDUAL";
       studentOrGroupLabel = "Методический час";
+      lessonCategory = "Метод";
     } else if (match.type === "group") {
       groupId = match.id;
       lessonType = "GROUP";
-      studentOrGroupLabel = `Группа ${match.label}`;
+      studentOrGroupLabel = `гр ${match.label}`;
     } else {
       studentId = match.id;
       lessonType = "INDIVIDUAL";
       studentOrGroupLabel = match.label;
     }
 
-    // Категория (не обязательная, но валидируем если указана)
-    if (row.category) {
-      const parsed = parseCategory(row.category);
-      if (!parsed) {
-        errors.push(`Неизвестная категория: "${row.category}"`);
-      }
-    }
-
     matches.push({
-      row,
-      rowIndex: i + 2, // строка в таблице (с учётом заголовка)
+      cell,
       teacherId,
       teacherLabel,
       studentId,
       groupId,
       studentOrGroupLabel,
-      dayOfWeek: dayOfWeek ?? undefined,
       startTime: startTime ?? undefined,
       lessonType,
+      lessonCategory: lessonCategory ?? undefined,
       errors,
     });
   }

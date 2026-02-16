@@ -1,25 +1,32 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getEndTime } from "@/lib/schedule-utils";
+import { getEndTime, DAY_GROUPS } from "@/lib/schedule-utils";
 import {
   extractSheetId,
   buildCsvUrl,
-  parseCSV,
-  matchAllRows,
-  parseCategory,
-  type ImportPreview,
+  parseCsvToGrid,
+  matchGrid,
 } from "@/lib/import-utils";
 
 // POST /api/schedule/import
-// Body: { sheetUrl, weekStart, preview?: boolean }
+// Body: { sheetUrl, weekStart, dayGroup: "mwf"|"tt", preview?: boolean }
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { sheetUrl, weekStart, preview } = body;
+    const { sheetUrl, weekStart, dayGroup, preview } = body;
 
-    if (!sheetUrl || !weekStart) {
+    if (!sheetUrl || !weekStart || !dayGroup) {
       return NextResponse.json(
-        { error: "sheetUrl и weekStart обязательны" },
+        { error: "sheetUrl, weekStart и dayGroup обязательны" },
+        { status: 400 }
+      );
+    }
+
+    // Дни недели для выбранной группы
+    const dg = DAY_GROUPS.find((g) => g.id === dayGroup);
+    if (!dg) {
+      return NextResponse.json(
+        { error: "Неверная группа дней" },
         { status: 400 }
       );
     }
@@ -40,12 +47,6 @@ export async function POST(request: NextRequest) {
     try {
       const csvRes = await fetch(csvUrl, { signal: AbortSignal.timeout(15000) });
       if (!csvRes.ok) {
-        if (csvRes.status === 404) {
-          return NextResponse.json(
-            { error: "Таблица не найдена. Проверьте ссылку." },
-            { status: 400 }
-          );
-        }
         return NextResponse.json(
           { error: "Не удалось загрузить таблицу. Проверьте, что она открыта для просмотра по ссылке." },
           { status: 400 }
@@ -60,11 +61,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. Парсинг CSV
-    const rows = parseCSV(csvData);
-    if (rows.length === 0) {
+    // 3. Парсинг CSV в сетку
+    const grid = parseCsvToGrid(csvData);
+    if (grid.length < 2) {
       return NextResponse.json(
-        { error: "Таблица пустая или неверный формат. Ожидаемые столбцы: Учитель, Ученик/Группа, День, Время, Категория, Кабинет" },
+        { error: "Таблица пустая. Нужна строка с учителями и хотя бы одна строка с временем." },
         { status: 400 }
       );
     }
@@ -77,18 +78,25 @@ export async function POST(request: NextRequest) {
     ]);
 
     // 5. Матчинг
-    const result: ImportPreview = matchAllRows(rows, teachers, students, groups);
+    const result = matchGrid(grid, teachers, students, groups);
 
-    // 6. Режим превью — вернуть результат
+    if (result.totalRows === 0) {
+      return NextResponse.json(
+        { error: "Не найдено занятий. Проверьте формат: учителя в первой строке, время в первом столбце." },
+        { status: 400 }
+      );
+    }
+
+    // 6. Режим превью
     if (preview) {
       return NextResponse.json(result);
     }
 
-    // 7. Режим импорта — создать слоты
+    // 7. Режим импорта — создать слоты для КАЖДОГО дня в группе
     const validMatches = result.matches.filter((m) => m.errors.length === 0);
     if (validMatches.length === 0) {
       return NextResponse.json(
-        { error: "Нет валидных строк для импорта. Исправьте ошибки и попробуйте снова." },
+        { error: "Нет валидных строк для импорта." },
         { status: 400 }
       );
     }
@@ -97,69 +105,70 @@ export async function POST(request: NextRequest) {
     const importErrors: string[] = [];
 
     for (const match of validMatches) {
-      const category = match.row.category ? parseCategory(match.row.category) : null;
-
-      // Проверка конфликта учителя
-      const teacherConflict = await prisma.scheduleSlot.findFirst({
-        where: {
-          weekStartDate: weekStart,
-          dayOfWeek: match.dayOfWeek!,
-          startTime: match.startTime!,
-          teacherId: match.teacherId!,
-        },
-      });
-
-      if (teacherConflict) {
-        importErrors.push(
-          `Строка ${match.rowIndex}: учитель ${match.teacherLabel} уже занят в ${match.row.day} ${match.row.time}`
-        );
-        continue;
-      }
-
-      // Проверка конфликта ученика
-      if (match.lessonType === "INDIVIDUAL" && match.studentId) {
-        const studentConflict = await prisma.scheduleSlot.findFirst({
+      // Создаём слот для КАЖДОГО дня в группе (Пн+Ср+Пт или Вт+Чт)
+      for (const dayOfWeek of dg.days) {
+        // Проверка конфликта учителя
+        const teacherConflict = await prisma.scheduleSlot.findFirst({
           where: {
             weekStartDate: weekStart,
-            dayOfWeek: match.dayOfWeek!,
+            dayOfWeek,
             startTime: match.startTime!,
-            studentId: match.studentId,
+            teacherId: match.teacherId!,
           },
         });
 
-        if (studentConflict) {
+        if (teacherConflict) {
           importErrors.push(
-            `Строка ${match.rowIndex}: ${match.studentOrGroupLabel} уже записан(а) на ${match.row.day} ${match.row.time}`
+            `${match.teacherLabel} уже занят(а) в ${match.startTime} (день ${dayOfWeek})`
           );
           continue;
         }
-      }
 
-      try {
-        await prisma.scheduleSlot.create({
-          data: {
-            teacherId: match.teacherId!,
-            studentId: match.studentId || null,
-            groupId: match.groupId || null,
-            dayOfWeek: match.dayOfWeek!,
-            startTime: match.startTime!,
-            endTime: getEndTime(match.startTime!),
-            weekStartDate: weekStart,
-            lessonType: match.lessonType!,
-            lessonCategory: category || null,
-            room: match.row.room || null,
-          },
-        });
-        created++;
-      } catch (createError) {
-        console.error("Ошибка создания слота:", createError);
-        importErrors.push(`Строка ${match.rowIndex}: ошибка создания`);
+        // Проверка конфликта ученика
+        if (match.lessonType === "INDIVIDUAL" && match.studentId) {
+          const studentConflict = await prisma.scheduleSlot.findFirst({
+            where: {
+              weekStartDate: weekStart,
+              dayOfWeek,
+              startTime: match.startTime!,
+              studentId: match.studentId,
+            },
+          });
+
+          if (studentConflict) {
+            importErrors.push(
+              `${match.studentOrGroupLabel} уже записан(а) на ${match.startTime} (день ${dayOfWeek})`
+            );
+            continue;
+          }
+        }
+
+        try {
+          await prisma.scheduleSlot.create({
+            data: {
+              teacherId: match.teacherId!,
+              studentId: match.studentId || null,
+              groupId: match.groupId || null,
+              dayOfWeek,
+              startTime: match.startTime!,
+              endTime: getEndTime(match.startTime!),
+              weekStartDate: weekStart,
+              lessonType: match.lessonType!,
+              lessonCategory: match.lessonCategory || null,
+              room: null,
+            },
+          });
+          created++;
+        } catch (createError) {
+          console.error("Ошибка создания слота:", createError);
+          importErrors.push(`Ошибка создания: ${match.teacherLabel} ${match.startTime}`);
+        }
       }
     }
 
     return NextResponse.json({
       count: created,
-      total: validMatches.length,
+      total: validMatches.length * dg.days.length,
       errors: importErrors,
     });
   } catch (error) {

@@ -275,7 +275,7 @@ export default function SchedulePage() {
       const res = await fetch("/api/schedule/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetUrl: importUrl, weekStart, preview: true }),
+        body: JSON.stringify({ sheetUrl: importUrl, weekStart, dayGroup: activeDayGroup, preview: true }),
       });
 
       const data = await res.json();
@@ -301,7 +301,7 @@ export default function SchedulePage() {
       const res = await fetch("/api/schedule/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetUrl: importUrl, weekStart, preview: false }),
+        body: JSON.stringify({ sheetUrl: importUrl, weekStart, dayGroup: activeDayGroup, preview: false }),
       });
 
       const data = await res.json();
@@ -615,11 +615,30 @@ export default function SchedulePage() {
               </p>
 
               <div className="rounded border bg-gray-50 p-3 text-xs text-gray-500">
-                <p className="mb-1 font-medium">Формат таблицы (столбцы):</p>
-                <p>Учитель | Ученик/Группа | День | Время | Категория | Кабинет</p>
-                <p className="mt-1">Пример: Иванов | Петров Алексей | Пн | 09:00 | И | 101</p>
-                <p>Группа: Иванов | Группа М1 | Вт | 10:00 | А | 102</p>
-                <p>Метод: Сидорова | метод | Пт | 14:00 | Метод |</p>
+                <p className="mb-1 font-medium">Формат таблицы (сетка):</p>
+                <table className="mt-1 border-collapse text-[11px]">
+                  <tbody>
+                    <tr>
+                      <td className="border px-2 py-0.5 bg-gray-100">Время</td>
+                      <td className="border px-2 py-0.5 bg-gray-100">Малыга</td>
+                      <td className="border px-2 py-0.5 bg-gray-100">Садвакас</td>
+                      <td className="border px-2 py-0.5 bg-gray-100">Спивакова</td>
+                    </tr>
+                    <tr>
+                      <td className="border px-2 py-0.5">09:00</td>
+                      <td className="border px-2 py-0.5">Адильулы Аскар И</td>
+                      <td className="border px-2 py-0.5">метод</td>
+                      <td className="border px-2 py-0.5">гр М0</td>
+                    </tr>
+                    <tr>
+                      <td className="border px-2 py-0.5">10:00</td>
+                      <td className="border px-2 py-0.5">Айтикенова Адель А</td>
+                      <td className="border px-2 py-0.5"></td>
+                      <td className="border px-2 py-0.5">Бейсханов Тех</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p className="mt-2">Ячейка: <strong>Фамилия Имя Категория</strong> (И/А/Тех/СОПР), <strong>метод</strong>, или <strong>гр НазваниеГруппы</strong></p>
               </div>
 
               <input
@@ -630,7 +649,7 @@ export default function SchedulePage() {
               />
 
               <p className="text-xs text-gray-400">
-                Данные будут импортированы на неделю: <strong>{formatWeekRange(weekStart)}</strong>
+                Импорт на неделю <strong>{formatWeekRange(weekStart)}</strong>, дни: <strong>{currentDayGroup.label}</strong>
               </p>
 
               <div className="flex justify-end gap-2">
@@ -666,12 +685,10 @@ export default function SchedulePage() {
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-gray-50">
                     <tr>
-                      <th className="border-b p-2 text-left">#</th>
-                      <th className="border-b p-2 text-left">Учитель</th>
-                      <th className="border-b p-2 text-left">Ученик/Группа</th>
-                      <th className="border-b p-2 text-left">День</th>
                       <th className="border-b p-2 text-left">Время</th>
-                      <th className="border-b p-2 text-left">Кат.</th>
+                      <th className="border-b p-2 text-left">Учитель</th>
+                      <th className="border-b p-2 text-left">Ячейка</th>
+                      <th className="border-b p-2 text-left">Результат</th>
                       <th className="border-b p-2 text-left">Статус</th>
                     </tr>
                   </thead>
@@ -681,20 +698,19 @@ export default function SchedulePage() {
                         key={i}
                         className={m.errors.length > 0 ? "bg-red-50" : "bg-green-50"}
                       >
-                        <td className="border-b p-2 text-gray-400">{m.rowIndex}</td>
+                        <td className="border-b p-2">{m.cell.time}</td>
                         <td className="border-b p-2">
                           {m.teacherLabel || (
-                            <span className="text-red-500">{m.row.teacherName}</span>
+                            <span className="text-red-500">{m.cell.teacherName}</span>
                           )}
                         </td>
+                        <td className="border-b p-2 text-gray-500">{m.cell.cellValue}</td>
                         <td className="border-b p-2">
-                          {m.studentOrGroupLabel || (
-                            <span className="text-red-500">{m.row.studentOrGroup}</span>
+                          {m.studentOrGroupLabel || "—"}
+                          {m.lessonCategory && (
+                            <span className="ml-1 text-gray-400">{m.lessonCategory}</span>
                           )}
                         </td>
-                        <td className="border-b p-2">{m.row.day}</td>
-                        <td className="border-b p-2">{m.row.time}</td>
-                        <td className="border-b p-2">{m.row.category}</td>
                         <td className="border-b p-2">
                           {m.errors.length > 0 ? (
                             <span className="text-red-600" title={m.errors.join("\n")}>
