@@ -269,6 +269,17 @@ export function matchTeacher(
   );
   if (byFirstNameOnly.length === 1) return byFirstNameOnly[0];
 
+  // Имя + начало фамилии: "Евгения В" → firstName="Евгения", lastName starts with "В"
+  const words = normalized.split(/\s+/);
+  if (words.length === 2 && words[1].length <= 2) {
+    const [firstName, lastInitial] = words;
+    const byNameInitial = teachers.filter((t) =>
+      t.firstName.toLowerCase() === firstName &&
+      t.lastName.toLowerCase().startsWith(lastInitial)
+    );
+    if (byNameInitial.length === 1) return byNameInitial[0];
+  }
+
   // Частичное совпадение фамилии
   const byPartial = teachers.filter((t) =>
     t.lastName.toLowerCase().startsWith(normalized)
@@ -584,6 +595,9 @@ function parseBlockColumns(block: string[][]): BlockTeacher[] {
     // Пропускаем легенду: "гРМ0", "ГРМ1", "СОПР", "АМ\АТ", "дм\да"
     if (/^[гГ][рР]/i.test(headerCell) && headerCell.length <= 10) continue;
     if (/^[А-ЯA-Z\\\/\s]+$/.test(headerCell) && headerCell.length <= 8) continue;
+    // Пропускаем служебные заголовки
+    const headerLower = headerCell.toLowerCase();
+    if (headerLower.includes("практикант") || headerLower.includes("стажер") || headerLower.includes("стажёр")) continue;
 
     const { displayName, specialization, room } = parseTeacherHeaderV2(headerCell);
 
@@ -855,12 +869,33 @@ function matchGroupFuzzy(
   );
   if (exact) return exact;
 
+  // Попробовать с префиксом "гр" (в БД может быть "грМ0", а мы ищем "М0")
+  const withPrefix = groups.find(
+    (g) => g.name.toLowerCase().replace(/\s+/g, "") === "гр" + norm
+  );
+  if (withPrefix) return withPrefix;
+
+  // Обратное: в БД "М0", а мы ищем "грМ0" → убираем "гр" из нашего запроса
+  const withoutPrefix = norm.startsWith("гр")
+    ? groups.find(
+        (g) => g.name.toLowerCase().replace(/\s+/g, "") === norm.slice(2)
+      )
+    : null;
+  if (withoutPrefix) return withoutPrefix;
+
   // Содержит / содержится
   const contains = groups.filter((g) => {
     const gNorm = g.name.toLowerCase().replace(/\s+/g, "");
     return gNorm.includes(norm) || norm.includes(gNorm);
   });
   if (contains.length === 1) return contains[0];
+
+  // Попробовать с/без "гр" в contains
+  const containsWithGr = groups.filter((g) => {
+    const gNorm = g.name.toLowerCase().replace(/\s+/g, "");
+    return gNorm.includes("гр" + norm) || ("гр" + norm).includes(gNorm);
+  });
+  if (containsWithGr.length === 1) return containsWithGr[0];
 
   return null;
 }

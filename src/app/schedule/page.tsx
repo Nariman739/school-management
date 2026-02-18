@@ -696,6 +696,50 @@ export default function SchedulePage() {
                 </p>
               )}
 
+              {/* Сводка ошибок — какие сущности не найдены */}
+              {importPreview.errorRows > 0 && (() => {
+                const missingTeachers = new Set<string>();
+                const missingStudents = new Set<string>();
+                const missingGroups = new Set<string>();
+                for (const m of importPreview.matches) {
+                  for (const err of m.errors) {
+                    if (err.startsWith("Учитель не найден:")) {
+                      missingTeachers.add(err.replace(/^Учитель не найден:\s*"?|"?\s*$/g, ""));
+                    } else if (err.startsWith("Группа не найдена:")) {
+                      missingGroups.add(err.replace(/^Группа не найдена:\s*"?|"?\s*$/g, ""));
+                    } else if (err.startsWith("Не найден:")) {
+                      missingStudents.add(err.replace(/^Не найден:\s*"?|"?\s*$/g, ""));
+                    }
+                  }
+                }
+                return (
+                  <div className="space-y-1 rounded border border-amber-200 bg-amber-50 p-3 text-xs">
+                    <p className="font-medium text-amber-800">Не найдено в базе данных:</p>
+                    {missingTeachers.size > 0 && (
+                      <p className="text-amber-700">
+                        <strong>Учителя ({missingTeachers.size}):</strong>{" "}
+                        {[...missingTeachers].join(", ")}
+                      </p>
+                    )}
+                    {missingGroups.size > 0 && (
+                      <p className="text-amber-700">
+                        <strong>Группы ({missingGroups.size}):</strong>{" "}
+                        {[...missingGroups].join(", ")}
+                      </p>
+                    )}
+                    {missingStudents.size > 0 && (
+                      <p className="text-amber-700">
+                        <strong>Ученики ({missingStudents.size}):</strong>{" "}
+                        {[...missingStudents].join(", ")}
+                      </p>
+                    )}
+                    <p className="mt-1 text-amber-600">
+                      Добавьте недостающих в соответствующих разделах, затем загрузите превью заново.
+                    </p>
+                  </div>
+                );
+              })()}
+
               {/* Таблица превью */}
               <div className="max-h-[400px] overflow-auto rounded border">
                 <table className="w-full text-xs">
