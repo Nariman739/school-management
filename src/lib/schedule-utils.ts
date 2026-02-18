@@ -21,6 +21,11 @@ export const LESSON_CATEGORIES = [
   { value: "Тех", label: "Технология" },
   { value: "СОПР", label: "Сопровождение" },
   { value: "Метод", label: "Методический час" },
+  { value: "ДЗ", label: "Домашнее задание" },
+  { value: "РЛ", label: "Русская литература" },
+  { value: "каз", label: "Казахский язык" },
+  { value: "МНО", label: "Предшкольная подготовка" },
+  { value: "АФК", label: "Адаптивная физкультура" },
 ];
 
 export const DAY_GROUPS = [

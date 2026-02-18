@@ -25,7 +25,7 @@ import {
   formatWeekRange,
   getEndTime,
 } from "@/lib/schedule-utils";
-import type { ImportPreview } from "@/lib/import-utils";
+import type { ImportPreviewV2 } from "@/lib/import-utils";
 
 interface Teacher {
   id: string;
@@ -79,6 +79,11 @@ function getCellStyle(slot: ScheduleSlot): string {
   if (cat === "И") return "bg-blue-100 text-blue-800";
   if (cat === "А") return "bg-amber-100 text-amber-800";
   if (cat === "Тех") return "bg-cyan-100 text-cyan-800";
+  if (cat === "ДЗ") return "bg-orange-100 text-orange-800";
+  if (cat === "РЛ") return "bg-rose-100 text-rose-800";
+  if (cat === "каз") return "bg-teal-100 text-teal-800";
+  if (cat === "МНО") return "bg-lime-100 text-lime-800";
+  if (cat === "АФК") return "bg-emerald-100 text-emerald-800";
   return "bg-blue-50 text-blue-800";
 }
 
@@ -118,7 +123,7 @@ export default function SchedulePage() {
   // Импорт из Google Sheets
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importUrl, setImportUrl] = useState("");
-  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreviewV2 | null>(null);
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState("");
   const [importStage, setImportStage] = useState<"input" | "preview">("input");
@@ -285,7 +290,7 @@ export default function SchedulePage() {
         return;
       }
 
-      setImportPreview(data as ImportPreview);
+      setImportPreview(data as ImportPreviewV2);
       setImportStage("preview");
     } catch {
       setImportError("Ошибка сети");
@@ -298,10 +303,21 @@ export default function SchedulePage() {
     setImportError("");
 
     try {
+      // Для v2 формата dayGroup не нужен (определяется из таблицы)
+      const isV2 = importPreview?.detectedFormat === "v2-multiblock";
+      const importBody: Record<string, unknown> = {
+        sheetUrl: importUrl,
+        weekStart,
+        preview: false,
+      };
+      if (!isV2) {
+        importBody.dayGroup = activeDayGroup;
+      }
+
       const res = await fetch("/api/schedule/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetUrl: importUrl, weekStart, dayGroup: activeDayGroup, preview: false }),
+        body: JSON.stringify(importBody),
       });
 
       const data = await res.json();
@@ -458,6 +474,11 @@ export default function SchedulePage() {
         <Badge variant="secondary" className="bg-green-100 text-green-800">Группа</Badge>
         <Badge variant="secondary" className="bg-purple-100 text-purple-800">СОПР</Badge>
         <Badge variant="secondary" className="bg-gray-200 text-gray-700">Метод</Badge>
+        <Badge variant="secondary" className="bg-orange-100 text-orange-800">ДЗ</Badge>
+        <Badge variant="secondary" className="bg-rose-100 text-rose-800">РЛ</Badge>
+        <Badge variant="secondary" className="bg-teal-100 text-teal-800">каз</Badge>
+        <Badge variant="secondary" className="bg-lime-100 text-lime-800">МНО</Badge>
+        <Badge variant="secondary" className="bg-emerald-100 text-emerald-800">АФК</Badge>
       </div>
 
       {/* Диалог добавления слота */}
@@ -611,34 +632,14 @@ export default function SchedulePage() {
           {importStage === "input" && (
             <div className="space-y-4">
               <p className="text-sm text-gray-600">
-                Вставьте ссылку на Google Таблицу. Таблица должна быть открыта для просмотра по ссылке.
+                Вставьте ссылку на Google Таблицу с расписанием. Таблица должна быть открыта для просмотра по ссылке.
               </p>
 
               <div className="rounded border bg-gray-50 p-3 text-xs text-gray-500">
-                <p className="mb-1 font-medium">Формат таблицы (сетка):</p>
-                <table className="mt-1 border-collapse text-[11px]">
-                  <tbody>
-                    <tr>
-                      <td className="border px-2 py-0.5 bg-gray-100">Время</td>
-                      <td className="border px-2 py-0.5 bg-gray-100">Малыга</td>
-                      <td className="border px-2 py-0.5 bg-gray-100">Садвакас</td>
-                      <td className="border px-2 py-0.5 bg-gray-100">Спивакова</td>
-                    </tr>
-                    <tr>
-                      <td className="border px-2 py-0.5">09:00</td>
-                      <td className="border px-2 py-0.5">Адильулы Аскар И</td>
-                      <td className="border px-2 py-0.5">метод</td>
-                      <td className="border px-2 py-0.5">гр М0</td>
-                    </tr>
-                    <tr>
-                      <td className="border px-2 py-0.5">10:00</td>
-                      <td className="border px-2 py-0.5">Айтикенова Адель А</td>
-                      <td className="border px-2 py-0.5"></td>
-                      <td className="border px-2 py-0.5">Бейсханов Тех</td>
-                    </tr>
-                  </tbody>
-                </table>
-                <p className="mt-2">Ячейка: <strong>Фамилия Имя Категория</strong> (И/А/Тех/СОПР), <strong>метод</strong>, или <strong>гр НазваниеГруппы</strong></p>
+                <p className="mb-1 font-medium">Поддерживаемые форматы:</p>
+                <p className="mt-1">1. <strong>Многоблочный</strong> — учителя по 2 колонки (пн/ср/пт + вт/чт), блоки через пустые строки</p>
+                <p>2. <strong>Простой</strong> — одна колонка на учителя, группа дней выбирается вручную</p>
+                <p className="mt-2">Формат определяется автоматически.</p>
               </div>
 
               <input
@@ -649,7 +650,7 @@ export default function SchedulePage() {
               />
 
               <p className="text-xs text-gray-400">
-                Импорт на неделю <strong>{formatWeekRange(weekStart)}</strong>, дни: <strong>{currentDayGroup.label}</strong>
+                Импорт на неделю <strong>{formatWeekRange(weekStart)}</strong>
               </p>
 
               <div className="flex justify-end gap-2">
@@ -665,8 +666,17 @@ export default function SchedulePage() {
 
           {importStage === "preview" && importPreview && (
             <div className="space-y-4">
-              {/* Сводка */}
-              <div className="flex gap-3">
+              {/* Формат и сводка */}
+              <div className="flex flex-wrap gap-3">
+                {importPreview.detectedFormat === "v2-multiblock" ? (
+                  <div className="rounded bg-blue-100 px-3 py-1 text-sm text-blue-800">
+                    Многоблочный ({importPreview.blocksDetected} бл., {importPreview.teachersDetected.length} уч.)
+                  </div>
+                ) : (
+                  <div className="rounded bg-gray-100 px-3 py-1 text-sm">
+                    Простой формат
+                  </div>
+                )}
                 <div className="rounded bg-gray-100 px-3 py-1 text-sm">
                   Всего: <strong>{importPreview.totalRows}</strong>
                 </div>
@@ -680,6 +690,12 @@ export default function SchedulePage() {
                 )}
               </div>
 
+              {importPreview.detectedFormat === "v2-multiblock" && (
+                <p className="text-xs text-gray-500">
+                  Обе группы дней (Пн/Ср/Пт и Вт/Чт) импортируются из таблицы автоматически.
+                </p>
+              )}
+
               {/* Таблица превью */}
               <div className="max-h-[400px] overflow-auto rounded border">
                 <table className="w-full text-xs">
@@ -688,40 +704,61 @@ export default function SchedulePage() {
                       <th className="border-b p-2 text-left">Время</th>
                       <th className="border-b p-2 text-left">Учитель</th>
                       <th className="border-b p-2 text-left">Ячейка</th>
+                      {importPreview.detectedFormat === "v2-multiblock" && (
+                        <>
+                          <th className="border-b p-2 text-left">Дни</th>
+                          <th className="border-b p-2 text-left">Каб</th>
+                        </>
+                      )}
                       <th className="border-b p-2 text-left">Результат</th>
                       <th className="border-b p-2 text-left">Статус</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {importPreview.matches.map((m, i) => (
-                      <tr
-                        key={i}
-                        className={m.errors.length > 0 ? "bg-red-50" : "bg-green-50"}
-                      >
-                        <td className="border-b p-2">{m.cell.time}</td>
-                        <td className="border-b p-2">
-                          {m.teacherLabel || (
-                            <span className="text-red-500">{m.cell.teacherName}</span>
+                    {importPreview.matches.map((m, i) => {
+                      const mv2 = m as ImportPreviewV2["matches"][number];
+                      return (
+                        <tr
+                          key={i}
+                          className={m.errors.length > 0 ? "bg-red-50" : "bg-green-50"}
+                        >
+                          <td className="border-b p-2">{m.cell.time}</td>
+                          <td className="border-b p-2">
+                            {m.teacherLabel || (
+                              <span className="text-red-500">{m.cell.teacherName}</span>
+                            )}
+                          </td>
+                          <td className="border-b p-2 text-gray-500 max-w-[120px] truncate" title={m.cell.cellValue}>
+                            {m.cell.cellValue}
+                          </td>
+                          {importPreview.detectedFormat === "v2-multiblock" && (
+                            <>
+                              <td className="border-b p-2 text-gray-500">
+                                {mv2.dayGroup === "mwf" ? "Пн/Ср/Пт" : "Вт/Чт"}
+                              </td>
+                              <td className="border-b p-2 text-gray-400">
+                                {mv2.room || "—"}
+                              </td>
+                            </>
                           )}
-                        </td>
-                        <td className="border-b p-2 text-gray-500">{m.cell.cellValue}</td>
-                        <td className="border-b p-2">
-                          {m.studentOrGroupLabel || "—"}
-                          {m.lessonCategory && (
-                            <span className="ml-1 text-gray-400">{m.lessonCategory}</span>
-                          )}
-                        </td>
-                        <td className="border-b p-2">
-                          {m.errors.length > 0 ? (
-                            <span className="text-red-600" title={m.errors.join("\n")}>
-                              {m.errors[0]}
-                            </span>
-                          ) : (
-                            <span className="text-green-600">OK</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                          <td className="border-b p-2">
+                            {m.studentOrGroupLabel || "—"}
+                            {m.lessonCategory && (
+                              <span className="ml-1 text-gray-400">{m.lessonCategory}</span>
+                            )}
+                          </td>
+                          <td className="border-b p-2">
+                            {m.errors.length > 0 ? (
+                              <span className="text-red-600" title={m.errors.join("\n")}>
+                                {m.errors[0]}
+                              </span>
+                            ) : (
+                              <span className="text-green-600">OK</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

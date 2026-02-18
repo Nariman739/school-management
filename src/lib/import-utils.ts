@@ -105,12 +105,13 @@ function parseCsvLine(line: string): string[] {
 }
 
 // Парсинг CSV в сетку (двумерный массив строк)
-export function parseCsvToGrid(csvData: string): string[][] {
+// keepEmptyRows=true нужен для V2 формата (блоки разделены пустыми строками)
+export function parseCsvToGrid(csvData: string, keepEmptyRows = false): string[][] {
   const lines = csvData.split(/\r?\n/);
   const grid: string[][] = [];
 
   for (const line of lines) {
-    if (!line.trim()) continue;
+    if (!keepEmptyRows && !line.trim()) continue;
     grid.push(parseCsvLine(line).map((v) => v.trim()));
   }
 
@@ -254,6 +255,12 @@ export function matchTeacher(
     return fp === normalized || fp.startsWith(normalized);
   });
   if (byFirstPatronymic.length === 1) return byFirstPatronymic[0];
+
+  // Только имя (для коротких записей)
+  const byFirstNameOnly = teachers.filter(
+    (t) => t.firstName.toLowerCase() === normalized
+  );
+  if (byFirstNameOnly.length === 1) return byFirstNameOnly[0];
 
   // Частичное совпадение фамилии
   const byPartial = teachers.filter((t) =>
@@ -419,5 +426,658 @@ export function matchGrid(
     validRows,
     errorRows: matches.length - validRows,
     matches,
+  };
+}
+
+// =====================================================================
+// V2: Многоблочный формат Google Sheets (реальный формат клиента)
+// =====================================================================
+//
+// Формат: 4 блока учителей, каждый блок:
+//   Строка 1: [пусто] | Учитель1 Имя Отчество Спец №Каб | [пусто] | Учитель2 ... | ...
+//   Строка 2: [пусто] | пн ср пт | вт чт | пн ср пт | вт чт | ...
+//   Строки 3+: 9.00   | ученик/группа | ученик/группа | ...
+// Блоки разделены пустыми строками.
+
+// --- V2 типы ---
+
+export interface GridCellV2 extends GridCell {
+  dayGroup: "mwf" | "tt";
+  room: string | null;
+}
+
+export interface MatchedRowV2 extends MatchedRow {
+  dayGroup: "mwf" | "tt";
+  room: string | null;
+}
+
+export interface ImportPreviewV2 extends ImportPreview {
+  matches: MatchedRowV2[];
+  detectedFormat: "v1-simple" | "v2-multiblock";
+  blocksDetected: number;
+  teachersDetected: string[];
+}
+
+interface BlockTeacher {
+  rawHeader: string;
+  displayName: string;
+  specialization: string | null;
+  room: string | null;
+  mwfColIndex: number;
+  ttColIndex: number;
+}
+
+interface ParsedCellV2 {
+  type: "student" | "group" | "method" | "multi_student" | "support_group" | "skip";
+  names: string[];
+  groupName: string | null;
+  category: string | null;
+  dayOverride: number[] | null;
+  raw: string;
+}
+
+// --- V2: Автодетекция формата ---
+
+export function detectFormat(grid: string[][]): "v1-simple" | "v2-multiblock" {
+  if (grid.length < 3) return "v1-simple";
+
+  // Ищем маркеры дней ("пн ср пт" / "вт чт") в первых 5 строках
+  for (let i = 0; i < Math.min(5, grid.length); i++) {
+    const row = grid[i];
+    const hasDayMarkers = row.some((cell) => {
+      const c = cell.toLowerCase().trim();
+      return c === "пн ср пт" || c === "вт чт";
+    });
+    if (hasDayMarkers) return "v2-multiblock";
+  }
+
+  return "v1-simple";
+}
+
+// --- V2: Разбивка на блоки ---
+
+function splitIntoBlocks(grid: string[][]): string[][][] {
+  const blocks: string[][][] = [];
+  let currentBlock: string[][] = [];
+  let emptyCount = 0;
+
+  for (const row of grid) {
+    const isEmptyRow = row.every((cell) => !cell.trim());
+
+    if (isEmptyRow) {
+      emptyCount++;
+      if (currentBlock.length >= 3 && emptyCount >= 1) {
+        blocks.push(currentBlock);
+        currentBlock = [];
+      }
+    } else {
+      emptyCount = 0;
+      currentBlock.push(row);
+    }
+  }
+
+  if (currentBlock.length >= 3) {
+    blocks.push(currentBlock);
+  }
+
+  return blocks;
+}
+
+function isScheduleBlock(block: string[][]): boolean {
+  if (block.length < 3) return false;
+  // Строка 2 должна содержать маркеры дней
+  const row1 = block[1];
+  return row1.some((cell) => {
+    const c = cell.toLowerCase().trim();
+    return c.includes("пн") || c.includes("вт чт");
+  });
+}
+
+// --- V2: Парсинг заголовков учителей ---
+
+function parseTeacherHeaderV2(header: string): {
+  displayName: string;
+  specialization: string | null;
+  room: string | null;
+} {
+  let remaining = header.trim();
+
+  // Извлечь кабинет: "№1каб", "№11 каб", "№1 + 3 + 4 каб", "№ 5каб"
+  let room: string | null = null;
+  const roomMatch = remaining.match(/№\s*([\d\s+]+)\s*каб/i);
+  if (roomMatch) {
+    room = roomMatch[1].trim();
+    remaining = remaining.replace(roomMatch[0], "").trim();
+  }
+
+  // Извлечь специализацию: "И", "А", "Тех", "И+А"
+  const SPEC_PATTERN = /\s+(И\+А|И|А|ТЕХ)\s*$/i;
+  let specialization: string | null = null;
+  const specMatch = remaining.match(SPEC_PATTERN);
+  if (specMatch) {
+    specialization = specMatch[1];
+    remaining = remaining.slice(0, specMatch.index).trim();
+  }
+
+  return { displayName: remaining, specialization, room };
+}
+
+function parseBlockColumns(block: string[][]): BlockTeacher[] {
+  if (block.length < 2) return [];
+
+  const headerRow = block[0];
+  const dayRow = block[1];
+  const teachers: BlockTeacher[] = [];
+
+  for (let col = 1; col < headerRow.length; col++) {
+    const headerCell = headerRow[col]?.trim();
+    if (!headerCell) continue;
+
+    // Пропускаем легенду: "гРМ0", "ГРМ1", "СОПР", "АМ\АТ", "дм\да"
+    if (/^[гГ][рР]/i.test(headerCell) && headerCell.length <= 10) continue;
+    if (/^[А-ЯA-Z\\\/\s]+$/.test(headerCell) && headerCell.length <= 8) continue;
+
+    const { displayName, specialization, room } = parseTeacherHeaderV2(headerCell);
+
+    // Определяем колонки пн/ср/пт и вт/чт из строки дней
+    const dayCell1 = (dayRow[col] || "").toLowerCase().trim();
+    const dayCell2 = (dayRow[col + 1] || "").toLowerCase().trim();
+
+    let mwfCol: number;
+    let ttCol: number;
+
+    if (dayCell1.includes("пн")) {
+      mwfCol = col;
+      ttCol = col + 1;
+    } else if (dayCell1.includes("вт")) {
+      ttCol = col;
+      mwfCol = col + 1;
+    } else {
+      mwfCol = col;
+      ttCol = col + 1;
+    }
+
+    teachers.push({
+      rawHeader: headerCell,
+      displayName,
+      specialization,
+      room,
+      mwfColIndex: mwfCol,
+      ttColIndex: ttCol,
+    });
+  }
+
+  return teachers;
+}
+
+// --- V2: Парсинг ячеек ---
+
+function isSkipValue(val: string): boolean {
+  const trimmed = val.trim().toLowerCase();
+  if (!trimmed) return true;
+  if (/^-+$/.test(trimmed)) return true;
+  if (/^метод\s*-+$/.test(trimmed)) return true;
+  if (trimmed === "им") return true;
+  return false;
+}
+
+const DAY_NAME_MAP: Record<string, number> = {
+  пн: 1, вт: 2, ср: 3, чт: 4, пт: 5,
+};
+
+function parseDayList(dayStr: string): number[] | null {
+  const normalized = dayStr.toLowerCase().trim();
+  if (!normalized) return null;
+
+  // Диапазон: "пн-пт"
+  const rangeMatch = normalized.match(/^(пн|вт|ср|чт|пт)-(пн|вт|ср|чт|пт)$/);
+  if (rangeMatch) {
+    const start = DAY_NAME_MAP[rangeMatch[1]];
+    const end = DAY_NAME_MAP[rangeMatch[2]];
+    if (start && end) {
+      const days: number[] = [];
+      for (let d = start; d <= end; d++) days.push(d);
+      return days;
+    }
+  }
+
+  // Список: "ср пт", "пн ср"
+  const dayTokens = normalized.split(/[\s,]+/);
+  const days = dayTokens
+    .map((t) => DAY_NAME_MAP[t])
+    .filter((d): d is number => d !== undefined);
+
+  return days.length > 0 ? days : null;
+}
+
+const CATEGORY_SUFFIXES_V2: Record<string, string> = {
+  и: "И", а: "А", тех: "Тех", сопр: "СОПР",
+  дз: "ДЗ", рл: "РЛ", каз: "каз", мно: "МНО",
+};
+
+function parseCellValueV2(cell: string): ParsedCellV2 {
+  const trimmed = cell.trim();
+
+  // Пустые / отменённые
+  if (!trimmed || /^-+$/.test(trimmed)) {
+    return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
+  }
+
+  const lower = trimmed.toLowerCase();
+
+  // "ИМ" — стажёр → пропускаем
+  if (lower === "им") {
+    return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
+  }
+
+  // "метод-", "метод --" → отменённый метод → пропуск
+  if (/^метод\s*-+$/i.test(lower)) {
+    return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
+  }
+
+  // "метод", "метод1" → методический час
+  if (/^метод\d*$/i.test(lower)) {
+    return { type: "method", names: [], groupName: null, category: "Метод", dayOverride: null, raw: trimmed };
+  }
+
+  // Сопровождение группы: "сопр грМ0", "сопргрМНО ОНР"
+  const supportGroupMatch = trimmed.match(/^сопр\s*гр\.?\s*(.+)/i);
+  if (supportGroupMatch) {
+    return {
+      type: "support_group",
+      names: [],
+      groupName: supportGroupMatch[1].trim(),
+      category: "СОПР",
+      dayOverride: null,
+      raw: trimmed,
+    };
+  }
+
+  // Группа: "грМ0", "гр М0", "гр.М0", "гршк1", "гр шк 1", "грреч1", "группа X"
+  const groupMatch = trimmed.match(/^(?:группа\s+|гр\.?\s*)(.*)/i);
+  if (groupMatch) {
+    return {
+      type: "group",
+      names: [],
+      groupName: groupMatch[1].trim(),
+      category: null,
+      dayOverride: null,
+      raw: trimmed,
+    };
+  }
+
+  // "МНО" отдельно, "МНО каз", "МНО ф.", "МНО ОНР" → групповое занятие
+  if (/^МНО/i.test(trimmed)) {
+    return {
+      type: "group",
+      names: [],
+      groupName: trimmed,
+      category: null,
+      dayOverride: null,
+      raw: trimmed,
+    };
+  }
+
+  // Два ученика: "Малика+Асанали", "Жансая+Ерхан", но НЕ "X+Y-" (отменённый)
+  if (trimmed.includes("+")) {
+    if (trimmed.endsWith("-")) {
+      return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
+    }
+
+    const parts = trimmed.split("+").map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= 2) {
+      return {
+        type: "multi_student",
+        names: parts,
+        groupName: null,
+        category: null,
+        dayOverride: null,
+        raw: trimmed,
+      };
+    }
+  }
+
+  // Индивидуальный ученик: "Асанали И", "МаркВ И пн-пт", "Улпан А ср пт"
+  let remaining = trimmed;
+  let dayOverride: number[] | null = null;
+
+  // Извлечь дни из конца: "пн-пт", "ср пт"
+  const dayPattern = /\s+((?:пн|вт|ср|чт|пт)(?:[\s-]+(?:пн|вт|ср|чт|пт))*)\s*$/i;
+  const dayMatch = remaining.match(dayPattern);
+  if (dayMatch) {
+    dayOverride = parseDayList(dayMatch[1]);
+    remaining = remaining.slice(0, dayMatch.index!).trim();
+  }
+
+  // Извлечь категорию (последнее слово)
+  const words = remaining.split(/\s+/);
+  let category: string | null = null;
+
+  if (words.length >= 2) {
+    const lastWord = words[words.length - 1].toLowerCase();
+    if (CATEGORY_SUFFIXES_V2[lastWord]) {
+      category = CATEGORY_SUFFIXES_V2[lastWord];
+      words.pop();
+    }
+  }
+
+  const name = words.join(" ");
+
+  // Имя заканчивается на "-" → отменённый слот
+  if (name.endsWith("-")) {
+    return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
+  }
+
+  return {
+    type: "student",
+    names: [name],
+    groupName: null,
+    category,
+    dayOverride,
+    raw: trimmed,
+  };
+}
+
+// --- V2: Матчинг учеников по сокращённым именам ---
+
+function matchStudentByAbbreviation(
+  abbr: string,
+  students: StudentRecord[]
+): StudentRecord | null {
+  const normalized = abbr.trim();
+  if (!normalized) return null;
+
+  // Точное совпадение по имени
+  const byFirstName = students.filter(
+    (s) => s.firstName.toLowerCase() === normalized.toLowerCase()
+  );
+  if (byFirstName.length === 1) return byFirstName[0];
+
+  // Разбиение: "МаркВ" → first="Марк", last starts with "В"
+  for (let i = 2; i < normalized.length; i++) {
+    const firstPart = normalized.slice(0, i).toLowerCase();
+    const lastPart = normalized.slice(i).toLowerCase();
+
+    if (!lastPart) continue;
+
+    const matches = students.filter((s) => {
+      const fn = s.firstName.toLowerCase();
+      const ln = s.lastName.toLowerCase();
+      return fn.startsWith(firstPart) && ln.startsWith(lastPart);
+    });
+
+    if (matches.length === 1) return matches[0];
+  }
+
+  // Целая строка как фамилия
+  const byLastName = students.filter(
+    (s) => s.lastName.toLowerCase() === normalized.toLowerCase()
+  );
+  if (byLastName.length === 1) return byLastName[0];
+
+  // Частичная фамилия
+  const byPartialLast = students.filter(
+    (s) => s.lastName.toLowerCase().startsWith(normalized.toLowerCase())
+  );
+  if (byPartialLast.length === 1) return byPartialLast[0];
+
+  // Частичное имя
+  const byPartialFirst = students.filter(
+    (s) => s.firstName.toLowerCase().startsWith(normalized.toLowerCase())
+  );
+  if (byPartialFirst.length === 1) return byPartialFirst[0];
+
+  return null;
+}
+
+// --- V2: Fuzzy-матчинг групп ---
+
+function matchGroupFuzzy(
+  name: string,
+  groups: GroupRecord[]
+): GroupRecord | null {
+  if (!name) return null;
+
+  // Нормализация: убираем пробелы, lowercase
+  const norm = name.toLowerCase().replace(/\s+/g, "");
+
+  // Точное совпадение (нормализованное)
+  const exact = groups.find(
+    (g) => g.name.toLowerCase().replace(/\s+/g, "") === norm
+  );
+  if (exact) return exact;
+
+  // Содержит / содержится
+  const contains = groups.filter((g) => {
+    const gNorm = g.name.toLowerCase().replace(/\s+/g, "");
+    return gNorm.includes(norm) || norm.includes(gNorm);
+  });
+  if (contains.length === 1) return contains[0];
+
+  return null;
+}
+
+// --- V2: Извлечение ячеек из многоблочной сетки ---
+
+function extractGridCellsV2(grid: string[][]): {
+  cells: GridCellV2[];
+  teacherNames: string[];
+  blocksCount: number;
+} {
+  const blocks = splitIntoBlocks(grid);
+  const scheduleBlocks = blocks.filter(isScheduleBlock);
+  const allCells: GridCellV2[] = [];
+  const allTeacherNames: string[] = [];
+
+  for (const block of scheduleBlocks) {
+    const teachers = parseBlockColumns(block);
+    allTeacherNames.push(...teachers.map((t) => t.displayName));
+
+    // Строки данных начинаются с индекса 2 (после заголовка и строки дней)
+    for (let rowIdx = 2; rowIdx < block.length; rowIdx++) {
+      const row = block[rowIdx];
+      const timeRaw = row[0]?.trim();
+      if (!timeRaw) continue;
+
+      const time = parseTime(timeRaw);
+      if (!time) continue;
+
+      for (const teacher of teachers) {
+        // Колонка Пн/Ср/Пт
+        const mwfValue = row[teacher.mwfColIndex]?.trim();
+        if (mwfValue && !isSkipValue(mwfValue)) {
+          allCells.push({
+            teacherName: teacher.displayName,
+            cellValue: mwfValue,
+            time,
+            rowIndex: rowIdx + 1,
+            colIndex: teacher.mwfColIndex + 1,
+            dayGroup: "mwf",
+            room: teacher.room,
+          });
+        }
+
+        // Колонка Вт/Чт
+        const ttValue = row[teacher.ttColIndex]?.trim();
+        if (ttValue && !isSkipValue(ttValue)) {
+          allCells.push({
+            teacherName: teacher.displayName,
+            cellValue: ttValue,
+            time,
+            rowIndex: rowIdx + 1,
+            colIndex: teacher.ttColIndex + 1,
+            dayGroup: "tt",
+            room: teacher.room,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    cells: allCells,
+    teacherNames: [...new Set(allTeacherNames)],
+    blocksCount: scheduleBlocks.length,
+  };
+}
+
+// --- V2: Матчинг одной ячейки ---
+
+function matchSingleCellV2(
+  cell: GridCellV2,
+  parsed: ParsedCellV2,
+  teachers: TeacherRecord[],
+  students: StudentRecord[],
+  groups: GroupRecord[]
+): MatchedRowV2 {
+  const errors: string[] = [];
+
+  // Матчим учителя
+  const teacher = matchTeacher(cell.teacherName, teachers);
+  const teacherId = teacher?.id;
+  const teacherLabel = teacher
+    ? `${teacher.lastName} ${teacher.firstName}`
+    : undefined;
+  if (!teacher) {
+    errors.push(`Учитель не найден: "${cell.teacherName}"`);
+  }
+
+  // Время
+  const startTime = parseTime(cell.time);
+  if (!startTime) {
+    errors.push(`Неверное время: "${cell.time}"`);
+  }
+
+  let studentId: string | undefined;
+  let groupId: string | undefined;
+  let lessonType: "INDIVIDUAL" | "GROUP" | undefined;
+  let studentOrGroupLabel: string | undefined;
+  let lessonCategory = parsed.category;
+
+  if (parsed.type === "method") {
+    lessonType = "INDIVIDUAL";
+    studentOrGroupLabel = "Методический час";
+    lessonCategory = "Метод";
+  } else if (parsed.type === "group" || parsed.type === "support_group") {
+    const group = matchGroupFuzzy(parsed.groupName!, groups);
+    if (group) {
+      groupId = group.id;
+      lessonType = "GROUP";
+      studentOrGroupLabel = `гр ${group.name}`;
+    } else {
+      errors.push(`Группа не найдена: "${parsed.groupName}"`);
+    }
+    if (parsed.type === "support_group") {
+      lessonCategory = "СОПР";
+    }
+  } else if (parsed.type === "student") {
+    const studentName = parsed.names[0];
+
+    // Стандартный матчинг
+    const match = matchStudentOrGroup(studentName, students, groups);
+    if (match && match.type === "student") {
+      studentId = match.id;
+      lessonType = "INDIVIDUAL";
+      studentOrGroupLabel = match.label;
+    } else if (match && match.type === "group") {
+      groupId = match.id;
+      lessonType = "GROUP";
+      studentOrGroupLabel = `гр ${match.label}`;
+    } else if (match && match.type === "method") {
+      lessonType = "INDIVIDUAL";
+      studentOrGroupLabel = "Методический час";
+      lessonCategory = "Метод";
+    } else {
+      // Фоллбэк: матчинг по сокращённому имени
+      const abbrMatch = matchStudentByAbbreviation(studentName, students);
+      if (abbrMatch) {
+        studentId = abbrMatch.id;
+        lessonType = "INDIVIDUAL";
+        studentOrGroupLabel = `${abbrMatch.lastName} ${abbrMatch.firstName}`;
+      } else {
+        errors.push(`Не найден: "${cell.cellValue}"`);
+      }
+    }
+  }
+
+  return {
+    cell,
+    teacherId,
+    teacherLabel,
+    studentId,
+    groupId,
+    studentOrGroupLabel,
+    startTime: startTime ?? undefined,
+    lessonType,
+    lessonCategory: lessonCategory ?? undefined,
+    errors,
+    dayGroup: cell.dayGroup,
+    room: cell.room,
+  };
+}
+
+// --- V2: Главная функция матчинга ---
+
+export function matchGridV2(
+  grid: string[][],
+  teachers: TeacherRecord[],
+  students: StudentRecord[],
+  groups: GroupRecord[]
+): ImportPreviewV2 {
+  const format = detectFormat(grid);
+
+  if (format === "v1-simple") {
+    // Делегируем в старый матчинг для обратной совместимости
+    const result = matchGrid(grid, teachers, students, groups);
+    return {
+      ...result,
+      matches: result.matches.map((m) => ({
+        ...m,
+        dayGroup: "mwf" as const,
+        room: null,
+      })),
+      detectedFormat: "v1-simple",
+      blocksDetected: 1,
+      teachersDetected: [],
+    };
+  }
+
+  // V2: многоблочный парсинг
+  const { cells, teacherNames, blocksCount } = extractGridCellsV2(grid);
+  const matches: MatchedRowV2[] = [];
+
+  for (const cell of cells) {
+    const parsed = parseCellValueV2(cell.cellValue);
+
+    if (parsed.type === "skip") continue;
+
+    // Для "два ученика" — создаём отдельную запись для каждого
+    if (parsed.type === "multi_student") {
+      for (const studentName of parsed.names) {
+        const row = matchSingleCellV2(
+          cell,
+          { ...parsed, type: "student", names: [studentName] },
+          teachers,
+          students,
+          groups
+        );
+        matches.push(row);
+      }
+    } else {
+      const row = matchSingleCellV2(cell, parsed, teachers, students, groups);
+      matches.push(row);
+    }
+  }
+
+  const validRows = matches.filter((m) => m.errors.length === 0).length;
+
+  return {
+    totalRows: matches.length,
+    validRows,
+    errorRows: matches.length - validRows,
+    matches,
+    detectedFormat: "v2-multiblock",
+    blocksDetected: blocksCount,
+    teachersDetected: teacherNames,
   };
 }
