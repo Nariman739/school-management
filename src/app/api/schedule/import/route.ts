@@ -86,8 +86,8 @@ export async function POST(request: NextRequest) {
       prisma.group.findMany(),
     ]);
 
-    // 5. Матчинг
-    const result = matchGridV2(grid, teachers, students, groups) as ImportPreviewV2;
+    // 5. Матчинг (передаём уже определённый формат)
+    const result = matchGridV2(grid, teachers, students, groups, format) as ImportPreviewV2;
 
     if (result.totalRows === 0) {
       return NextResponse.json(

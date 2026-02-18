@@ -104,10 +104,17 @@ function parseCsvLine(line: string): string[] {
   return result;
 }
 
+// Нормализация пробелов (NBSP, zero-width spaces и т.д.) → обычный пробел
+function normalizeWhitespace(s: string): string {
+  return s.replace(/[\u00A0\u200B\u2000-\u200D\uFEFF]/g, " ");
+}
+
 // Парсинг CSV в сетку (двумерный массив строк)
 // keepEmptyRows=true нужен для V2 формата (блоки разделены пустыми строками)
 export function parseCsvToGrid(csvData: string, keepEmptyRows = false): string[][] {
-  const lines = csvData.split(/\r?\n/);
+  // Убираем BOM и нормализуем пробелы
+  const cleaned = normalizeWhitespace(csvData.replace(/^\uFEFF/, ""));
+  const lines = cleaned.split(/\r\n|\r|\n/);
   const grid: string[][] = [];
 
   for (const line of lines) {
@@ -482,11 +489,12 @@ export function detectFormat(grid: string[][]): "v1-simple" | "v2-multiblock" {
   if (grid.length < 3) return "v1-simple";
 
   // Ищем маркеры дней ("пн ср пт" / "вт чт") в первых 5 строках
+  // Используем includes для робастности (NBSP, лишние пробелы и т.д.)
   for (let i = 0; i < Math.min(5, grid.length); i++) {
     const row = grid[i];
     const hasDayMarkers = row.some((cell) => {
-      const c = cell.toLowerCase().trim();
-      return c === "пн ср пт" || c === "вт чт";
+      const c = cell.toLowerCase().replace(/\s+/g, " ").trim();
+      return (c.includes("пн") && c.includes("пт")) || c === "вт чт";
     });
     if (hasDayMarkers) return "v2-multiblock";
   }
@@ -1022,9 +1030,10 @@ export function matchGridV2(
   grid: string[][],
   teachers: TeacherRecord[],
   students: StudentRecord[],
-  groups: GroupRecord[]
+  groups: GroupRecord[],
+  detectedFormat?: "v1-simple" | "v2-multiblock"
 ): ImportPreviewV2 {
-  const format = detectFormat(grid);
+  const format = detectedFormat ?? detectFormat(grid);
 
   if (format === "v1-simple") {
     // Делегируем в старый матчинг для обратной совместимости
