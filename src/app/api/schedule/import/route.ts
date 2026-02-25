@@ -5,7 +5,6 @@ import {
   extractSheetId,
   buildCsvUrl,
   parseCsvToGrid,
-  matchGrid,
   matchGridV2,
   detectFormat,
 } from "@/lib/import-utils";
@@ -13,7 +12,6 @@ import type { ImportPreviewV2, MatchedRowV2 } from "@/lib/import-utils";
 
 // POST /api/schedule/import
 // Body: { sheetUrl, weekStart, dayGroup?: "mwf"|"tt", preview?: boolean }
-// dayGroup обязателен для v1 формата, опционален для v2 (определяется из таблицы)
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -57,11 +55,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 3. Определить формат и парсить CSV
-    // Для определения формата нужно сначала распарсить с пустыми строками
     const gridWithEmpty = parseCsvToGrid(csvData, true);
     const format = detectFormat(gridWithEmpty);
 
-    // Для v1 формата dayGroup обязателен
     if (format === "v1-simple" && !dayGroup) {
       return NextResponse.json(
         { error: "Для простого формата выберите группу дней (Пн/Ср/Пт или Вт/Чт)" },
@@ -69,7 +65,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Для v1 парсим без пустых строк (как раньше), для v2 — с пустыми
     const grid = format === "v2-multiblock" ? gridWithEmpty : parseCsvToGrid(csvData);
 
     if (grid.length < 2) {
@@ -79,14 +74,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. Загрузить данные из БД
-    const [teachers, students, groups] = await Promise.all([
+    // 4. Загрузить данные из БД (включая сохранённые псевдонимы)
+    const [teachers, students, groups, savedAliases] = await Promise.all([
       prisma.teacher.findMany({ where: { isActive: true } }),
       prisma.student.findMany({ where: { isActive: true } }),
       prisma.group.findMany(),
+      prisma.nameAlias.findMany(),
     ]);
 
-    // 5. Матчинг (передаём уже определённый формат)
+    // 5. Матчинг
     const result = matchGridV2(grid, teachers, students, groups, format) as ImportPreviewV2;
 
     if (result.totalRows === 0) {
@@ -96,12 +92,79 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Режим превью
+    // 6. Применить сохранённые псевдонимы к строкам с ошибками
+    if (savedAliases.length > 0) {
+      const teacherAliasMap = new Map(
+        savedAliases.filter((a) => a.type === "teacher").map((a) => [a.alias, a.entityId])
+      );
+      const studentAliasMap = new Map(
+        savedAliases.filter((a) => a.type === "student").map((a) => [a.alias, a.entityId])
+      );
+      const groupAliasMap = new Map(
+        savedAliases.filter((a) => a.type === "group").map((a) => [a.alias, a.entityId])
+      );
+
+      for (const match of result.matches) {
+        if (match.errors.length === 0) continue;
+
+        // Исправить ошибку учителя
+        const hasTeacherError = match.errors.some((e) => e.startsWith("Учитель не найден"));
+        if (hasTeacherError) {
+          const aliasId = teacherAliasMap.get(match.cell.teacherName);
+          if (aliasId) {
+            const teacher = teachers.find((t) => t.id === aliasId);
+            if (teacher) {
+              match.teacherId = teacher.id;
+              match.teacherLabel = `${teacher.lastName} ${teacher.firstName}`;
+              match.errors = match.errors.filter((e) => !e.startsWith("Учитель не найден"));
+            }
+          }
+        }
+
+        // Исправить ошибку ученика/группы
+        const hasStudentError = match.errors.some(
+          (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена")
+        );
+        if (hasStudentError) {
+          const cellValue = match.cell.cellValue;
+          const studentId = studentAliasMap.get(cellValue);
+          const groupId = groupAliasMap.get(cellValue);
+
+          if (studentId) {
+            const student = students.find((s) => s.id === studentId);
+            if (student) {
+              match.studentId = student.id;
+              match.studentOrGroupLabel = `${student.lastName} ${student.firstName}`;
+              match.lessonType = "INDIVIDUAL";
+              match.errors = match.errors.filter(
+                (e) => !e.startsWith("Не найден") && !e.startsWith("Группа не найдена")
+              );
+            }
+          } else if (groupId) {
+            const group = groups.find((g) => g.id === groupId);
+            if (group) {
+              match.groupId = group.id;
+              match.studentOrGroupLabel = `гр ${group.name}`;
+              match.lessonType = "GROUP";
+              match.errors = match.errors.filter(
+                (e) => !e.startsWith("Не найден") && !e.startsWith("Группа не найдена")
+              );
+            }
+          }
+        }
+      }
+
+      // Пересчитать после применения псевдонимов
+      result.validRows = result.matches.filter((m) => m.errors.length === 0).length;
+      result.errorRows = result.matches.length - result.validRows;
+    }
+
+    // 7. Режим превью — вернуть результат матчинга
     if (preview) {
       return NextResponse.json(result);
     }
 
-    // 7. Режим импорта — создать слоты
+    // 8. Режим импорта (прямой, без ручного сопоставления) — создать валидные слоты
     const validMatches = result.matches.filter((m) => m.errors.length === 0);
     if (validMatches.length === 0) {
       return NextResponse.json(
@@ -115,21 +178,12 @@ export async function POST(request: NextRequest) {
 
     for (const match of validMatches) {
       const matchV2 = match as MatchedRowV2;
-
-      // Определяем дни для этого слота
-      let days: number[];
-      if (result.detectedFormat === "v2-multiblock") {
-        // Дни определяются из колонки ячейки (пн/ср/пт или вт/чт)
-        const dg = DAY_GROUPS.find((g) => g.id === matchV2.dayGroup);
-        days = dg?.days || [];
-      } else {
-        // V1: используем выбранный пользователем dayGroup
-        const dg = DAY_GROUPS.find((g) => g.id === dayGroup);
-        days = dg?.days || [];
-      }
+      const dg = DAY_GROUPS.find((g) =>
+        result.detectedFormat === "v2-multiblock" ? g.id === matchV2.dayGroup : g.id === dayGroup
+      );
+      const days = dg?.days ?? [];
 
       for (const dayOfWeek of days) {
-        // Проверка конфликта учителя
         const teacherConflict = await prisma.scheduleSlot.findFirst({
           where: {
             weekStartDate: weekStart,
@@ -140,13 +194,10 @@ export async function POST(request: NextRequest) {
         });
 
         if (teacherConflict) {
-          importErrors.push(
-            `${match.teacherLabel} уже занят(а) в ${match.startTime} (день ${dayOfWeek})`
-          );
+          importErrors.push(`${match.teacherLabel} занят в ${match.startTime} (день ${dayOfWeek})`);
           continue;
         }
 
-        // Проверка конфликта ученика
         if (match.lessonType === "INDIVIDUAL" && match.studentId) {
           const studentConflict = await prisma.scheduleSlot.findFirst({
             where: {
@@ -158,9 +209,7 @@ export async function POST(request: NextRequest) {
           });
 
           if (studentConflict) {
-            importErrors.push(
-              `${match.studentOrGroupLabel} уже записан(а) на ${match.startTime} (день ${dayOfWeek})`
-            );
+            importErrors.push(`${match.studentOrGroupLabel} занят в ${match.startTime} (день ${dayOfWeek})`);
             continue;
           }
         }
@@ -169,48 +218,37 @@ export async function POST(request: NextRequest) {
           await prisma.scheduleSlot.create({
             data: {
               teacherId: match.teacherId!,
-              studentId: match.studentId || null,
-              groupId: match.groupId || null,
+              studentId: match.studentId ?? null,
+              groupId: match.groupId ?? null,
               dayOfWeek,
               startTime: match.startTime!,
               endTime: getEndTime(match.startTime!),
               weekStartDate: weekStart,
               lessonType: match.lessonType!,
-              lessonCategory: match.lessonCategory || null,
-              room: matchV2.room || null,
+              lessonCategory: match.lessonCategory ?? null,
+              room: matchV2.room ?? null,
             },
           });
           created++;
         } catch (createError) {
           console.error("Ошибка создания слота:", createError);
-          importErrors.push(`Ошибка создания: ${match.teacherLabel} ${match.startTime}`);
+          importErrors.push(`Ошибка: ${match.teacherLabel} ${match.startTime}`);
         }
       }
     }
 
-    // Подсчёт ожидаемого количества
     let expectedTotal = 0;
     for (const match of validMatches) {
       const matchV2 = match as MatchedRowV2;
-      if (result.detectedFormat === "v2-multiblock") {
-        const dg = DAY_GROUPS.find((g) => g.id === matchV2.dayGroup);
-        expectedTotal += dg?.days.length || 0;
-      } else {
-        const dg = DAY_GROUPS.find((g) => g.id === dayGroup);
-        expectedTotal += dg?.days.length || 0;
-      }
+      const dg = DAY_GROUPS.find((g) =>
+        result.detectedFormat === "v2-multiblock" ? g.id === matchV2.dayGroup : g.id === dayGroup
+      );
+      expectedTotal += dg?.days.length ?? 0;
     }
 
-    return NextResponse.json({
-      count: created,
-      total: expectedTotal,
-      errors: importErrors,
-    });
+    return NextResponse.json({ count: created, total: expectedTotal, errors: importErrors });
   } catch (error) {
     console.error("Ошибка импорта расписания:", error);
-    return NextResponse.json(
-      { error: "Внутренняя ошибка сервера" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Внутренняя ошибка сервера" }, { status: 500 });
   }
 }

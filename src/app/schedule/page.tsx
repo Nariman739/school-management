@@ -25,7 +25,23 @@ import {
   formatWeekRange,
   getEndTime,
 } from "@/lib/schedule-utils";
-import type { ImportPreviewV2 } from "@/lib/import-utils";
+import type { ImportPreviewV2, MatchedRowV2 } from "@/lib/import-utils";
+
+// Ручное сопоставление строк импорта (когда fuzzy match не нашёл)
+interface RowResolution {
+  teacherId?: string;
+  teacherLabel?: string;
+  studentId?: string | null;
+  groupId?: string | null;
+  entityLabel?: string; // подпись для ученика/группы
+}
+
+interface PendingAlias {
+  alias: string;
+  type: "student" | "teacher" | "group";
+  entityId: string;
+  label: string;
+}
 
 interface Teacher {
   id: string;
@@ -70,50 +86,6 @@ interface ScheduleSlot {
   group: (Group & { members: GroupMember[] }) | null;
 }
 
-// Сводка ошибок импорта
-function ImportErrorSummary({ matches }: { matches: ImportPreviewV2["matches"] }) {
-  const missingTeachers = new Set<string>();
-  const missingStudents = new Set<string>();
-  const missingGroups = new Set<string>();
-  for (const m of matches) {
-    for (const err of m.errors) {
-      if (err.startsWith("Учитель не найден:")) {
-        missingTeachers.add(err.replace(/^Учитель не найден:\s*"?|"?\s*$/g, ""));
-      } else if (err.startsWith("Группа не найдена:")) {
-        missingGroups.add(err.replace(/^Группа не найдена:\s*"?|"?\s*$/g, ""));
-      } else if (err.startsWith("Не найден:")) {
-        missingStudents.add(err.replace(/^Не найден:\s*"?|"?\s*$/g, ""));
-      }
-    }
-  }
-  if (missingTeachers.size === 0 && missingGroups.size === 0 && missingStudents.size === 0) return null;
-  return (
-    <div className="space-y-1 rounded border border-amber-200 bg-amber-50 p-3 text-xs">
-      <p className="font-medium text-amber-800">Не найдено в базе данных:</p>
-      {missingTeachers.size > 0 && (
-        <p className="text-amber-700">
-          <strong>Учителя ({missingTeachers.size}):</strong>{" "}
-          {[...missingTeachers].join(", ")}
-        </p>
-      )}
-      {missingGroups.size > 0 && (
-        <p className="text-amber-700">
-          <strong>Группы ({missingGroups.size}):</strong>{" "}
-          {[...missingGroups].join(", ")}
-        </p>
-      )}
-      {missingStudents.size > 0 && (
-        <p className="text-amber-700">
-          <strong>Ученики ({missingStudents.size}):</strong>{" "}
-          {[...missingStudents].join(", ")}
-        </p>
-      )}
-      <p className="mt-1 text-amber-600">
-        Добавьте недостающих в соответствующих разделах, затем загрузите превью заново.
-      </p>
-    </div>
-  );
-}
 
 // Цвета по типу занятия
 function getCellStyle(slot: ScheduleSlot): string {
@@ -172,6 +144,11 @@ export default function SchedulePage() {
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState("");
   const [importStage, setImportStage] = useState<"input" | "preview">("input");
+  // Ручное сопоставление: index строки → что выбрал пользователь
+  const [resolutions, setResolutions] = useState<Map<number, RowResolution>>(new Map());
+  // Диалог сохранения псевдонимов после импорта
+  const [saveAliasesOpen, setSaveAliasesOpen] = useState(false);
+  const [pendingAliases, setPendingAliases] = useState<PendingAlias[]>([]);
 
   const currentDayGroup = DAY_GROUPS.find((dg) => dg.id === activeDayGroup)!;
 
@@ -314,6 +291,7 @@ export default function SchedulePage() {
     setImportPreview(null);
     setImportError("");
     setImportStage("input");
+    setResolutions(new Map());
     setImportDialogOpen(true);
   };
 
@@ -344,25 +322,107 @@ export default function SchedulePage() {
   };
 
   const handleConfirmImport = async () => {
+    if (!importPreview) return;
     setImportLoading(true);
     setImportError("");
 
     try {
-      // Для v2 формата dayGroup не нужен (определяется из таблицы)
-      const isV2 = importPreview?.detectedFormat === "v2-multiblock";
-      const importBody: Record<string, unknown> = {
-        sheetUrl: importUrl,
-        weekStart,
-        preview: false,
+      type SlotToCreate = {
+        teacherId: string;
+        studentId?: string | null;
+        groupId?: string | null;
+        startTime: string;
+        dayGroup: "mwf" | "tt";
+        lessonType: string;
+        lessonCategory?: string | null;
+        room?: string | null;
       };
-      if (!isV2) {
-        importBody.dayGroup = activeDayGroup;
+
+      const slotsToCreate: SlotToCreate[] = [];
+      const newAliases: PendingAlias[] = [];
+
+      for (let i = 0; i < importPreview.matches.length; i++) {
+        const m = importPreview.matches[i] as MatchedRowV2;
+        const r = resolutions.get(i);
+
+        const hasTeacherError = m.errors.some((e) => e.startsWith("Учитель не найден"));
+        const hasStudentError = m.errors.some(
+          (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена")
+        );
+
+        // Пропускаем строки с нерешёнными ошибками
+        if (hasTeacherError && !r?.teacherId) continue;
+        if (hasStudentError && !r?.studentId && !r?.groupId) {
+          if (m.errors.length > 0) continue;
+        }
+
+        // Определяем teacherId
+        const teacherId = r?.teacherId ?? m.teacherId;
+        if (!teacherId) continue;
+
+        // Если учитель был найден вручную — сохраняем псевдоним
+        if (r?.teacherId) {
+          newAliases.push({
+            alias: m.cell.teacherName,
+            type: "teacher",
+            entityId: r.teacherId,
+            label: r.teacherLabel ?? r.teacherId,
+          });
+        }
+
+        // Определяем studentId/groupId
+        let studentId = m.studentId ?? null;
+        let groupId = m.groupId ?? null;
+        let lessonType = m.lessonType ?? "INDIVIDUAL";
+
+        if (r?.studentId !== undefined) {
+          studentId = r.studentId;
+          groupId = null;
+          lessonType = "INDIVIDUAL";
+          if (r.studentId) {
+            newAliases.push({
+              alias: m.cell.cellValue,
+              type: "student",
+              entityId: r.studentId,
+              label: r.entityLabel ?? r.studentId,
+            });
+          }
+        } else if (r?.groupId !== undefined) {
+          groupId = r.groupId;
+          studentId = null;
+          lessonType = "GROUP";
+          if (r.groupId) {
+            newAliases.push({
+              alias: m.cell.cellValue,
+              type: "group",
+              entityId: r.groupId,
+              label: r.entityLabel ?? r.groupId,
+            });
+          }
+        }
+
+        slotsToCreate.push({
+          teacherId,
+          studentId,
+          groupId,
+          startTime: m.startTime!,
+          dayGroup: m.dayGroup,
+          lessonType,
+          lessonCategory: m.lessonCategory ?? null,
+          room: m.room ?? null,
+        });
       }
 
-      const res = await fetch("/api/schedule/import", {
+      if (slotsToCreate.length === 0) {
+        setImportError("Нет слотов для импорта. Исправьте ошибки в таблице ниже.");
+        setImportLoading(false);
+        return;
+      }
+
+      const res = await fetch("/api/schedule/import/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(importBody),
+        body: JSON.stringify({ slots: slotsToCreate, weekStart }),
       });
 
       const data = await res.json();
@@ -372,18 +432,57 @@ export default function SchedulePage() {
         return;
       }
 
-      const msg = `Импортировано ${data.count} из ${data.total} занятий`;
-      const errMsg = data.errors?.length
-        ? `\n\nПропущено:\n${data.errors.join("\n")}`
-        : "";
-      alert(msg + errMsg);
       setImportDialogOpen(false);
+      setResolutions(new Map());
       fetchSlots();
+
+      // Предлагаем сохранить псевдонимы для следующего импорта
+      if (newAliases.length > 0) {
+        setPendingAliases(newAliases);
+        setSaveAliasesOpen(true);
+      } else {
+        alert(`Импортировано ${data.count} занятий`);
+      }
     } catch {
       setImportError("Ошибка сети");
     }
     setImportLoading(false);
   };
+
+  const handleSaveAliases = async () => {
+    try {
+      await fetch("/api/name-aliases", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          aliases: pendingAliases.map((a) => ({
+            alias: a.alias,
+            type: a.type,
+            entityId: a.entityId,
+          })),
+        }),
+      });
+    } catch {
+      console.error("Ошибка сохранения псевдонимов");
+    }
+    setSaveAliasesOpen(false);
+    setPendingAliases([]);
+  };
+
+  // Сколько строк будет импортировано (автоматически + вручную)
+  const resolvedManuallyCount = importPreview
+    ? [...resolutions.keys()].filter((i) => {
+        const m = importPreview.matches[i];
+        if (!m || m.errors.length === 0) return false;
+        const r = resolutions.get(i)!;
+        const hasTeacherErr = m.errors.some((e) => e.startsWith("Учитель не найден"));
+        const hasStudentErr = m.errors.some(
+          (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена")
+        );
+        return (!hasTeacherErr || !!r.teacherId) && (!hasStudentErr || !!r.studentId || !!r.groupId);
+      }).length
+    : 0;
+  const totalToImport = (importPreview?.validRows ?? 0) + resolvedManuallyCount;
 
   return (
     <div>
@@ -663,7 +762,7 @@ export default function SchedulePage() {
 
       {/* Диалог импорта из Google Sheets */}
       <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Импорт из Google Sheets</DialogTitle>
           </DialogHeader>
@@ -679,25 +778,15 @@ export default function SchedulePage() {
               <p className="text-sm text-gray-600">
                 Вставьте ссылку на Google Таблицу с расписанием. Таблица должна быть открыта для просмотра по ссылке.
               </p>
-
-              <div className="rounded border bg-gray-50 p-3 text-xs text-gray-500">
-                <p className="mb-1 font-medium">Поддерживаемые форматы:</p>
-                <p className="mt-1">1. <strong>Многоблочный</strong> — учителя по 2 колонки (пн/ср/пт + вт/чт), блоки через пустые строки</p>
-                <p>2. <strong>Простой</strong> — одна колонка на учителя, группа дней выбирается вручную</p>
-                <p className="mt-2">Формат определяется автоматически.</p>
-              </div>
-
               <input
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
                 value={importUrl}
                 onChange={(e) => setImportUrl(e.target.value)}
                 placeholder="https://docs.google.com/spreadsheets/d/..."
               />
-
               <p className="text-xs text-gray-400">
                 Импорт на неделю <strong>{formatWeekRange(weekStart)}</strong>
               </p>
-
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setImportDialogOpen(false)}>
                   Отмена
@@ -711,41 +800,41 @@ export default function SchedulePage() {
 
           {importStage === "preview" && importPreview && (
             <div className="space-y-4">
-              {/* Формат и сводка */}
-              <div className="flex flex-wrap gap-3">
+              {/* Сводка */}
+              <div className="flex flex-wrap gap-2">
                 {importPreview.detectedFormat === "v2-multiblock" ? (
-                  <div className="rounded bg-blue-100 px-3 py-1 text-sm text-blue-800">
-                    Многоблочный ({importPreview.blocksDetected} бл., {importPreview.teachersDetected.length} уч.)
-                  </div>
+                  <span className="rounded bg-blue-100 px-2 py-1 text-xs text-blue-800">
+                    Многоблочный · {importPreview.blocksDetected} бл. · {importPreview.teachersDetected.length} уч.
+                  </span>
                 ) : (
-                  <div className="rounded bg-gray-100 px-3 py-1 text-sm">
-                    Простой формат
-                  </div>
+                  <span className="rounded bg-gray-100 px-2 py-1 text-xs">Простой формат</span>
                 )}
-                <div className="rounded bg-gray-100 px-3 py-1 text-sm">
+                <span className="rounded bg-gray-100 px-2 py-1 text-xs">
                   Всего: <strong>{importPreview.totalRows}</strong>
-                </div>
-                <div className="rounded bg-green-100 px-3 py-1 text-sm text-green-800">
-                  Валидных: <strong>{importPreview.validRows}</strong>
-                </div>
+                </span>
+                <span className="rounded bg-green-100 px-2 py-1 text-xs text-green-800">
+                  Авто: <strong>{importPreview.validRows}</strong>
+                </span>
                 {importPreview.errorRows > 0 && (
-                  <div className="rounded bg-red-100 px-3 py-1 text-sm text-red-800">
-                    Ошибок: <strong>{importPreview.errorRows}</strong>
-                  </div>
+                  <span className="rounded bg-amber-100 px-2 py-1 text-xs text-amber-800">
+                    Нужно сопоставить: <strong>{importPreview.errorRows}</strong>
+                  </span>
+                )}
+                {resolvedManuallyCount > 0 && (
+                  <span className="rounded bg-yellow-100 px-2 py-1 text-xs text-yellow-800">
+                    Вручную: <strong>{resolvedManuallyCount}</strong>
+                  </span>
                 )}
               </div>
 
-              {importPreview.detectedFormat === "v2-multiblock" && (
-                <p className="text-xs text-gray-500">
-                  Обе группы дней (Пн/Ср/Пт и Вт/Чт) импортируются из таблицы автоматически.
-                </p>
+              {importPreview.errorRows > 0 && (
+                <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">
+                  Для строк с ошибками выберите кто это в колонке <strong>«Выбрать»</strong>. После импорта система запомнит сопоставления.
+                </div>
               )}
 
-              {/* Сводка ошибок — какие сущности не найдены */}
-              {importPreview.errorRows > 0 && <ImportErrorSummary matches={importPreview.matches} />}
-
               {/* Таблица превью */}
-              <div className="max-h-[400px] overflow-auto rounded border">
+              <div className="max-h-[420px] overflow-auto rounded border">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-gray-50">
                     <tr>
@@ -758,50 +847,170 @@ export default function SchedulePage() {
                           <th className="border-b p-2 text-left">Каб</th>
                         </>
                       )}
-                      <th className="border-b p-2 text-left">Результат</th>
+                      <th className="border-b p-2 text-left">Результат / Выбрать</th>
                       <th className="border-b p-2 text-left">Статус</th>
                     </tr>
                   </thead>
                   <tbody>
                     {importPreview.matches.map((m, i) => {
-                      const mv2 = m as ImportPreviewV2["matches"][number];
+                      const mv2 = m as MatchedRowV2;
+                      const r = resolutions.get(i);
+                      const hasTeacherErr = m.errors.some((e) => e.startsWith("Учитель не найден"));
+                      const hasStudentErr = m.errors.some(
+                        (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена")
+                      );
+                      const isResolved =
+                        m.errors.length === 0 ||
+                        (r && (!hasTeacherErr || !!r.teacherId) && (!hasStudentErr || !!r.studentId || !!r.groupId));
+
                       return (
                         <tr
                           key={i}
-                          className={m.errors.length > 0 ? "bg-red-50" : "bg-green-50"}
+                          className={
+                            m.errors.length === 0
+                              ? "bg-green-50"
+                              : isResolved
+                              ? "bg-yellow-50"
+                              : "bg-red-50"
+                          }
                         >
-                          <td className="border-b p-2">{m.cell.time}</td>
+                          <td className="border-b p-2 whitespace-nowrap">{m.cell.time}</td>
+
+                          {/* Учитель */}
                           <td className="border-b p-2">
-                            {m.teacherLabel || (
-                              <span className="text-red-500">{m.cell.teacherName}</span>
+                            {hasTeacherErr ? (
+                              <div className="space-y-1">
+                                <div className="text-red-500">{m.cell.teacherName}</div>
+                                <Select
+                                  value={r?.teacherId ?? ""}
+                                  onValueChange={(tid) => {
+                                    const t = teachers.find((t) => t.id === tid);
+                                    if (!t) return;
+                                    setResolutions((prev) => {
+                                      const next = new Map(prev);
+                                      next.set(i, {
+                                        ...next.get(i),
+                                        teacherId: tid,
+                                        teacherLabel: `${t.lastName} ${t.firstName}`,
+                                      });
+                                      return next;
+                                    });
+                                  }}
+                                >
+                                  <SelectTrigger className="h-6 w-40 text-xs">
+                                    <SelectValue placeholder="Выбрать учителя" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {teachers.map((t) => (
+                                      <SelectItem key={t.id} value={t.id}>
+                                        {t.lastName} {t.firstName}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            ) : (
+                              <span>{m.teacherLabel ?? m.cell.teacherName}</span>
                             )}
                           </td>
-                          <td className="border-b p-2 text-gray-500 max-w-[120px] truncate" title={m.cell.cellValue}>
+
+                          {/* Исходная ячейка */}
+                          <td
+                            className="border-b p-2 text-gray-500 max-w-[110px] truncate"
+                            title={m.cell.cellValue}
+                          >
                             {m.cell.cellValue}
                           </td>
+
+                          {/* Дни + Каб (только v2) */}
                           {importPreview.detectedFormat === "v2-multiblock" && (
                             <>
-                              <td className="border-b p-2 text-gray-500">
+                              <td className="border-b p-2 text-gray-500 whitespace-nowrap">
                                 {mv2.dayGroup === "mwf" ? "Пн/Ср/Пт" : "Вт/Чт"}
                               </td>
-                              <td className="border-b p-2 text-gray-400">
-                                {mv2.room || "—"}
-                              </td>
+                              <td className="border-b p-2 text-gray-400">{mv2.room || "—"}</td>
                             </>
                           )}
+
+                          {/* Результат / Выбрать */}
                           <td className="border-b p-2">
-                            {m.studentOrGroupLabel || "—"}
-                            {m.lessonCategory && (
-                              <span className="ml-1 text-gray-400">{m.lessonCategory}</span>
+                            {m.errors.length === 0 ? (
+                              <span>
+                                {m.studentOrGroupLabel || "—"}
+                                {m.lessonCategory && (
+                                  <span className="ml-1 text-gray-400">{m.lessonCategory}</span>
+                                )}
+                              </span>
+                            ) : hasStudentErr ? (
+                              r?.studentId || r?.groupId ? (
+                                <span className="text-yellow-700">{r.entityLabel}</span>
+                              ) : (
+                                <Select
+                                  onValueChange={(val) => {
+                                    setResolutions((prev) => {
+                                      const next = new Map(prev);
+                                      const existing = next.get(i) ?? {};
+                                      if (val.startsWith("s:")) {
+                                        const sid = val.slice(2);
+                                        const s = students.find((s) => s.id === sid);
+                                        next.set(i, {
+                                          ...existing,
+                                          studentId: sid,
+                                          groupId: null,
+                                          entityLabel: s ? `${s.lastName} ${s.firstName}` : sid,
+                                        });
+                                      } else if (val.startsWith("g:")) {
+                                        const gid = val.slice(2);
+                                        const g = groups.find((g) => g.id === gid);
+                                        next.set(i, {
+                                          ...existing,
+                                          groupId: gid,
+                                          studentId: null,
+                                          entityLabel: g ? `гр ${g.name}` : gid,
+                                        });
+                                      }
+                                      return next;
+                                    });
+                                  }}
+                                >
+                                  <SelectTrigger className="h-6 w-44 text-xs">
+                                    <SelectValue placeholder="Кто это? ▾" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="_" disabled>
+                                      — Группы —
+                                    </SelectItem>
+                                    {groups.map((g) => (
+                                      <SelectItem key={g.id} value={`g:${g.id}`}>
+                                        гр {g.name}
+                                      </SelectItem>
+                                    ))}
+                                    <SelectItem value="_2" disabled>
+                                      — Ученики —
+                                    </SelectItem>
+                                    {students.map((s) => (
+                                      <SelectItem key={s.id} value={`s:${s.id}`}>
+                                        {s.lastName} {s.firstName}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              )
+                            ) : (
+                              <span className="text-gray-400">—</span>
                             )}
                           </td>
-                          <td className="border-b p-2">
-                            {m.errors.length > 0 ? (
-                              <span className="text-red-600" title={m.errors.join("\n")}>
-                                {m.errors[0]}
-                              </span>
+
+                          {/* Статус */}
+                          <td className="border-b p-2 whitespace-nowrap">
+                            {m.errors.length === 0 ? (
+                              <span className="text-green-600">✓ OK</span>
+                            ) : isResolved ? (
+                              <span className="text-yellow-600">✎ Вручную</span>
                             ) : (
-                              <span className="text-green-600">OK</span>
+                              <span className="text-red-500" title={m.errors.join("\n")}>
+                                ✗ Не найден
+                              </span>
                             )}
                           </td>
                         </tr>
@@ -811,28 +1020,71 @@ export default function SchedulePage() {
                 </table>
               </div>
 
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setImportStage("input");
-                    setImportPreview(null);
-                    setImportError("");
-                  }}
-                >
-                  Назад
-                </Button>
-                <Button
-                  onClick={handleConfirmImport}
-                  disabled={importPreview.validRows === 0 || importLoading}
-                >
-                  {importLoading
-                    ? "Импорт..."
-                    : `Импортировать ${importPreview.validRows} занятий`}
-                </Button>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-500">
+                  Будет импортировано: <strong>{totalToImport}</strong> занятий
+                  {resolvedManuallyCount > 0 && (
+                    <span className="text-yellow-700"> (включая {resolvedManuallyCount} вручную)</span>
+                  )}
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setImportStage("input");
+                      setImportPreview(null);
+                      setImportError("");
+                      setResolutions(new Map());
+                    }}
+                  >
+                    Назад
+                  </Button>
+                  <Button
+                    onClick={handleConfirmImport}
+                    disabled={totalToImport === 0 || importLoading}
+                  >
+                    {importLoading ? "Импорт..." : `Импортировать ${totalToImport} занятий`}
+                  </Button>
+                </div>
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог сохранения псевдонимов */}
+      <Dialog open={saveAliasesOpen} onOpenChange={setSaveAliasesOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Сохранить сопоставления?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-gray-600">
+            При следующем импорте эти имена будут распознаны автоматически:
+          </p>
+          <div className="max-h-48 overflow-auto rounded border p-2 text-xs space-y-1">
+            {pendingAliases.map((a, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="rounded bg-gray-100 px-1 font-mono">{a.alias}</span>
+                <span className="text-gray-400">→</span>
+                <span className="font-medium">{a.label}</span>
+                <span className="text-gray-400">({a.type})</span>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSaveAliasesOpen(false);
+                setPendingAliases([]);
+              }}
+            >
+              Не сохранять
+            </Button>
+            <Button onClick={handleSaveAliases}>
+              Сохранить ({pendingAliases.length})
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

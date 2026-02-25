@@ -100,3 +100,15 @@ model Attendance {
 
   @@unique([scheduleSlotId, studentId, date])
 }
+
+// Псевдонимы для импорта расписания из Google Sheets
+// Пример: alias="МаркВ И", type="student", entityId=<UUID ученика>
+model NameAlias {
+  id        String   @id @default(uuid())
+  alias     String   // как написано в таблице
+  type      String   // "student" | "teacher" | "group"
+  entityId  String   // UUID сущности в БД
+  createdAt DateTime @default(now())
+
+  @@unique([alias, type])
+}
