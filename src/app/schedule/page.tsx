@@ -886,12 +886,21 @@ export default function SchedulePage() {
                                   onValueChange={(tid) => {
                                     const t = teachers.find((t) => t.id === tid);
                                     if (!t) return;
+                                    const sameTeacherName = m.cell.teacherName;
                                     setResolutions((prev) => {
                                       const next = new Map(prev);
-                                      next.set(i, {
-                                        ...next.get(i),
-                                        teacherId: tid,
-                                        teacherLabel: `${t.lastName} ${t.firstName}`,
+                                      // Применяем ко ВСЕМ строкам с тем же именем учителя
+                                      importPreview!.matches.forEach((match, idx) => {
+                                        if (
+                                          match.cell.teacherName === sameTeacherName &&
+                                          match.errors.some((e) => e.startsWith("Учитель не найден"))
+                                        ) {
+                                          next.set(idx, {
+                                            ...next.get(idx),
+                                            teacherId: tid,
+                                            teacherLabel: `${t.lastName} ${t.firstName}`,
+                                          });
+                                        }
                                       });
                                       return next;
                                     });
@@ -947,28 +956,41 @@ export default function SchedulePage() {
                               ) : (
                                 <Select
                                   onValueChange={(val) => {
+                                    const sameCellValue = m.cell.cellValue;
                                     setResolutions((prev) => {
                                       const next = new Map(prev);
-                                      const existing = next.get(i) ?? {};
-                                      if (val.startsWith("s:")) {
-                                        const sid = val.slice(2);
-                                        const s = students.find((s) => s.id === sid);
-                                        next.set(i, {
-                                          ...existing,
-                                          studentId: sid,
-                                          groupId: null,
-                                          entityLabel: s ? `${s.lastName} ${s.firstName}` : sid,
-                                        });
-                                      } else if (val.startsWith("g:")) {
-                                        const gid = val.slice(2);
-                                        const g = groups.find((g) => g.id === gid);
-                                        next.set(i, {
-                                          ...existing,
-                                          groupId: gid,
-                                          studentId: null,
-                                          entityLabel: g ? `гр ${g.name}` : gid,
-                                        });
-                                      }
+                                      // Применяем ко ВСЕМ строкам с той же ячейкой
+                                      importPreview!.matches.forEach((match, idx) => {
+                                        if (
+                                          match.cell.cellValue === sameCellValue &&
+                                          match.errors.some(
+                                            (e) =>
+                                              e.startsWith("Не найден") ||
+                                              e.startsWith("Группа не найдена")
+                                          )
+                                        ) {
+                                          const existing = next.get(idx) ?? {};
+                                          if (val.startsWith("s:")) {
+                                            const sid = val.slice(2);
+                                            const s = students.find((s) => s.id === sid);
+                                            next.set(idx, {
+                                              ...existing,
+                                              studentId: sid,
+                                              groupId: null,
+                                              entityLabel: s ? `${s.lastName} ${s.firstName}` : sid,
+                                            });
+                                          } else if (val.startsWith("g:")) {
+                                            const gid = val.slice(2);
+                                            const g = groups.find((g) => g.id === gid);
+                                            next.set(idx, {
+                                              ...existing,
+                                              groupId: gid,
+                                              studentId: null,
+                                              entityLabel: g ? `гр ${g.name}` : gid,
+                                            });
+                                          }
+                                        }
+                                      });
                                       return next;
                                     });
                                   }}
