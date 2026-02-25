@@ -592,9 +592,12 @@ function parseBlockColumns(block: string[][]): BlockTeacher[] {
     const headerCell = headerRow[col]?.trim();
     if (!headerCell) continue;
 
-    // Пропускаем легенду: "гРМ0", "ГРМ1", "СОПР", "АМ\АТ", "дм\да"
+    // Пропускаем легенду: "гРМ0", "ГРМ1", "СОПР", "АМ\АТ", "дм\да", "ДЖ\РН"
     if (/^[гГ][рР]/i.test(headerCell) && headerCell.length <= 10) continue;
-    if (/^[А-ЯA-Z\\\/\s]+$/.test(headerCell) && headerCell.length <= 8) continue;
+    // Любой заголовок с обратной/прямой косой чертой — легенда (не имя учителя)
+    if (headerCell.includes("\\") || headerCell.includes("/")) continue;
+    // Короткие аббревиатуры только из букв (строчных или прописных) и пробелов — легенда
+    if (/^[а-яёА-ЯЁa-zA-Z\s]+$/.test(headerCell) && headerCell.length <= 6) continue;
     // Пропускаем служебные заголовки
     const headerLower = headerCell.toLowerCase();
     if (headerLower.includes("практикант") || headerLower.includes("стажер") || headerLower.includes("стажёр")) continue;
