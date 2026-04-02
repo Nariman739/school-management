@@ -1,12 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-// Статусы:
-// ATTENDED — урок состоялся (педагог ✅, родитель ✅)
-// SICK — больничный (педагог ❌, родитель ❌)
-// LATE — опоздание (педагог ❌, родитель ✅)
-// ABSENT — не был (педагог ❌, родитель ❌)
-
 // GET /api/attendance?date=2025-01-20&teacherId=xxx
 export async function GET(request: NextRequest) {
   try {
@@ -18,14 +12,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "date обязателен" }, { status: 400 });
     }
 
-    // Определяем понедельник недели для этой даты
     const d = new Date(date);
     const day = d.getDay();
     const diff = d.getDate() - day + (day === 0 ? -6 : 1);
     d.setDate(diff);
     const weekStart = d.toISOString().split("T")[0];
 
-    // День недели: 1=Пн ... 7=Вс
     const dateObj = new Date(date);
     const jsDay = dateObj.getDay();
     const dayOfWeek = jsDay === 0 ? 7 : jsDay;
@@ -34,22 +26,17 @@ export async function GET(request: NextRequest) {
       weekStartDate: weekStart,
       dayOfWeek,
     };
-
-    if (teacherId) {
-      slotWhere.teacherId = teacherId;
-    }
+    if (teacherId) slotWhere.teacherId = teacherId;
 
     const scheduleSlots = await prisma.scheduleSlot.findMany({
       where: slotWhere,
       include: {
         teacher: true,
         student: true,
-        group: {
-          include: { members: { include: { student: true } } },
-        },
+        group: { include: { members: { include: { student: true } } } },
         attendances: {
           where: { date },
-          include: { substituteTeacher: true },
+          include: { substituteTeacher: true, assistantTeacher: true },
         },
       },
       orderBy: [{ startTime: "asc" }],
@@ -89,13 +76,22 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      // Замена
       const firstAtt = slot.attendances[0];
+
       const substitution = firstAtt?.isSubstitution
         ? {
             substituteTeacherId: firstAtt.substituteTeacherId,
             substituteTeacherName: firstAtt.substituteTeacher
               ? `${firstAtt.substituteTeacher.lastName} ${firstAtt.substituteTeacher.firstName}`
+              : null,
+          }
+        : null;
+
+      const assistant = firstAtt?.assistantTeacherId
+        ? {
+            assistantTeacherId: firstAtt.assistantTeacherId,
+            assistantTeacherName: firstAtt.assistantTeacher
+              ? `${firstAtt.assistantTeacher.lastName} ${firstAtt.assistantTeacher.firstName}`
               : null,
           }
         : null;
@@ -111,16 +107,14 @@ export async function GET(request: NextRequest) {
         groupName: slot.group?.name || null,
         students: slotStudents,
         substitution,
+        assistant,
       };
     });
 
     return NextResponse.json(attendanceData);
   } catch (error) {
     console.error("Ошибка при получении посещаемости:", error);
-    return NextResponse.json(
-      { error: "Не удалось получить данные посещаемости" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Не удалось получить данные" }, { status: 500 });
   }
 }
 
@@ -132,9 +126,10 @@ export async function POST(request: NextRequest) {
       scheduleSlotId,
       studentId,
       date,
-      status, // ATTENDED | SICK | LATE | ABSENT
+      status,
       isSubstitution,
       substituteTeacherId,
+      assistantTeacherId,
     } = body;
 
     if (!scheduleSlotId || !studentId || !date || !status) {
@@ -148,17 +143,14 @@ export async function POST(request: NextRequest) {
 
     const attendance = await prisma.attendance.upsert({
       where: {
-        scheduleSlotId_studentId_date: {
-          scheduleSlotId,
-          studentId,
-          date,
-        },
+        scheduleSlotId_studentId_date: { scheduleSlotId, studentId, date },
       },
       update: {
         status,
         isPresent,
         isSubstitution: isSubstitution ?? false,
         substituteTeacherId: isSubstitution ? substituteTeacherId : null,
+        assistantTeacherId: assistantTeacherId ?? null,
         markedAt: new Date(),
       },
       create: {
@@ -169,6 +161,7 @@ export async function POST(request: NextRequest) {
         isPresent,
         isSubstitution: isSubstitution ?? false,
         substituteTeacherId: isSubstitution ? substituteTeacherId : null,
+        assistantTeacherId: assistantTeacherId ?? null,
         markedAt: new Date(),
       },
     });
@@ -176,41 +169,51 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(attendance);
   } catch (error) {
     console.error("Ошибка при отметке посещаемости:", error);
-    return NextResponse.json(
-      { error: "Не удалось отметить посещаемость" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Ошибка" }, { status: 500 });
   }
 }
 
-// PATCH /api/attendance — массовая замена педагога на слоте
+// PATCH /api/attendance — массовое обновление слота (замена/ассистент)
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
-    const { scheduleSlotId, date, substituteTeacherId } = body;
+    const { scheduleSlotId, date, substituteTeacherId, assistantTeacherId, action } = body;
 
-    if (!scheduleSlotId || !date || !substituteTeacherId) {
+    if (!scheduleSlotId || !date) {
       return NextResponse.json(
-        { error: "scheduleSlotId, date и substituteTeacherId обязательны" },
+        { error: "scheduleSlotId и date обязательны" },
         { status: 400 }
       );
     }
 
-    // Обновляем все записи посещаемости этого слота на эту дату
-    const updated = await prisma.attendance.updateMany({
-      where: { scheduleSlotId, date },
-      data: {
-        isSubstitution: true,
-        substituteTeacherId,
-      },
-    });
+    if (action === "setAssistant" && assistantTeacherId) {
+      const updated = await prisma.attendance.updateMany({
+        where: { scheduleSlotId, date },
+        data: { assistantTeacherId },
+      });
+      return NextResponse.json({ updated: updated.count });
+    }
 
-    return NextResponse.json({ updated: updated.count });
+    if (action === "removeAssistant") {
+      const updated = await prisma.attendance.updateMany({
+        where: { scheduleSlotId, date },
+        data: { assistantTeacherId: null },
+      });
+      return NextResponse.json({ updated: updated.count });
+    }
+
+    // Default: замена педагога
+    if (substituteTeacherId) {
+      const updated = await prisma.attendance.updateMany({
+        where: { scheduleSlotId, date },
+        data: { isSubstitution: true, substituteTeacherId },
+      });
+      return NextResponse.json({ updated: updated.count });
+    }
+
+    return NextResponse.json({ error: "Не указано действие" }, { status: 400 });
   } catch (error) {
-    console.error("Ошибка при замене педагога:", error);
-    return NextResponse.json(
-      { error: "Не удалось обновить замену" },
-      { status: 500 }
-    );
+    console.error("Ошибка:", error);
+    return NextResponse.json({ error: "Ошибка" }, { status: 500 });
   }
 }

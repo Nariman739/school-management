@@ -44,6 +44,12 @@ interface Teacher {
   phone: string | null;
   individualRate: number;
   groupRate: number;
+  groupRate3: number;
+  groupRate5: number;
+  assistantRate: number;
+  morningBonusRate: number;
+  eveningBonusRate: number;
+  behavioralBonus: number;
   room?: string;
   specialization?: string;
   isMethodist?: boolean;
@@ -58,6 +64,12 @@ interface TeacherFormData {
   phone: string;
   individualRate: string;
   groupRate: string;
+  groupRate3: string;
+  groupRate5: string;
+  assistantRate: string;
+  morningBonusRate: string;
+  eveningBonusRate: string;
+  behavioralBonus: string;
   room: string;
   specialization: string;
   isMethodist: boolean;
@@ -71,6 +83,12 @@ const emptyForm: TeacherFormData = {
   phone: "",
   individualRate: "0",
   groupRate: "0",
+  groupRate3: "0",
+  groupRate5: "0",
+  assistantRate: "0",
+  morningBonusRate: "0",
+  eveningBonusRate: "0",
+  behavioralBonus: "0",
   room: "",
   specialization: "",
   isMethodist: false,
@@ -126,6 +144,12 @@ export default function TeachersPage() {
       phone: teacher.phone ?? "",
       individualRate: String(teacher.individualRate),
       groupRate: String(teacher.groupRate),
+      groupRate3: String(teacher.groupRate3 ?? 0),
+      groupRate5: String(teacher.groupRate5 ?? 0),
+      assistantRate: String(teacher.assistantRate ?? 0),
+      morningBonusRate: String(teacher.morningBonusRate ?? 0),
+      eveningBonusRate: String(teacher.eveningBonusRate ?? 0),
+      behavioralBonus: String(teacher.behavioralBonus ?? 0),
       room: teacher.room ?? "",
       specialization: teacher.specialization ?? "",
       isMethodist: teacher.isMethodist ?? false,
@@ -151,6 +175,12 @@ export default function TeachersPage() {
         phone: formData.phone.trim() || null,
         individualRate: parseInt(formData.individualRate, 10) || 0,
         groupRate: parseInt(formData.groupRate, 10) || 0,
+        groupRate3: parseInt(formData.groupRate3, 10) || 0,
+        groupRate5: parseInt(formData.groupRate5, 10) || 0,
+        assistantRate: parseInt(formData.assistantRate, 10) || 0,
+        morningBonusRate: parseInt(formData.morningBonusRate, 10) || 0,
+        eveningBonusRate: parseInt(formData.eveningBonusRate, 10) || 0,
+        behavioralBonus: parseInt(formData.behavioralBonus, 10) || 0,
         room: formData.room.trim() || null,
         specialization: formData.specialization || null,
         isMethodist: formData.isMethodist,
@@ -428,6 +458,60 @@ export default function TeachersPage() {
                       groupRate: e.target.value,
                     }))
                   }
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="groupRate3" className="text-right">
+                  Группа 3 чел. (₸)
+                </Label>
+                <Input id="groupRate3" className="col-span-3" type="number" min="0"
+                  value={formData.groupRate3}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, groupRate3: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="groupRate5" className="text-right">
+                  Группа 5 чел. (₸)
+                </Label>
+                <Input id="groupRate5" className="col-span-3" type="number" min="0"
+                  value={formData.groupRate5}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, groupRate5: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="assistantRate" className="text-right">
+                  Ставка ассистента (₸)
+                </Label>
+                <Input id="assistantRate" className="col-span-3" type="number" min="0"
+                  value={formData.assistantRate}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, assistantRate: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="morningBonusRate" className="text-right">
+                  Утро 9-10 доплата (₸)
+                </Label>
+                <Input id="morningBonusRate" className="col-span-3" type="number" min="0"
+                  value={formData.morningBonusRate}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, morningBonusRate: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="eveningBonusRate" className="text-right">
+                  Вечер 17-19 доплата (₸)
+                </Label>
+                <Input id="eveningBonusRate" className="col-span-3" type="number" min="0"
+                  value={formData.eveningBonusRate}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, eveningBonusRate: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="behavioralBonus" className="text-right">
+                  ПВД доплата (₸)
+                </Label>
+                <Input id="behavioralBonus" className="col-span-3" type="number" min="0"
+                  value={formData.behavioralBonus}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, behavioralBonus: e.target.value }))}
                 />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">

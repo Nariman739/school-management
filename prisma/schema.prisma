@@ -13,20 +13,35 @@ model Teacher {
   firstName      String
   patronymic     String?
   phone          String?
+
+  // Ставки — базовые
   individualRate      Int      @default(0) // тенге/час за индивидуальное занятие
-  groupRate           Int      @default(0) // тенге/час за групповое занятие
+  groupRate           Int      @default(0) // тенге/час за групповое (базовая, 2 ребёнка)
+  groupRate3          Int      @default(0) // ставка за группу из 3 детей
+  groupRate5          Int      @default(0) // ставка за группу из 5 детей
+  assistantRate       Int      @default(0) // ставка когда работает ассистентом
+
+  // Повышенные ставки по времени суток
+  morningBonusRate    Int      @default(0) // доплата за утренние часы (9:00-10:00)
+  eveningBonusRate    Int      @default(0) // доплата за вечерние часы (17:00-19:00)
+
+  // Поведенческие
   behavioralBonus     Int      @default(0) // доплата за поведенческого ребёнка (тенге/час)
-  room                String?  // кабинет по умолчанию ("Каб.1", "Спортзал")
+
+  room                String?  // кабинет по умолчанию
   specialization      String?  // "И" (интенсив), "А" (академ), etc.
   isMethodist         Boolean  @default(false)
   methodistWeeklyRate Int      @default(0) // недельная ставка методиста (5000₸)
+  methodistDailyRate  Int      @default(0) // дневная ставка методиста (авто: weeklyRate / 5)
   isActive            Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  groups        Group[]
-  scheduleSlots ScheduleSlot[]
-  substitutions Attendance[]   @relation("SubstituteTeacher") // замены
+  groups           Group[]
+  scheduleSlots    ScheduleSlot[]
+  substitutions    Attendance[]     @relation("SubstituteTeacher")
+  assistantSlots   Attendance[]     @relation("AssistantTeacher")
+  methodistChecks  MethodistCheck[]
 }
 
 model Student {
@@ -103,18 +118,34 @@ model Attendance {
   studentId      String
   date           String // "2025-01-20"
   status         String   @default("ABSENT") // ATTENDED | SICK | LATE | ABSENT
-  isPresent      Boolean  @default(false) // legacy, kept for backwards compat — true = ATTENDED
+  isPresent      Boolean  @default(false) // legacy — true = ATTENDED
   markedAt       DateTime?
 
   // Замена педагога
-  isSubstitution      Boolean  @default(false) // была замена?
-  substituteTeacherId String?  // кто реально провёл урок
+  isSubstitution      Boolean  @default(false)
+  substituteTeacherId String?
+
+  // Ассистент
+  assistantTeacherId  String?  // кто был ассистентом на этом уроке
 
   scheduleSlot      ScheduleSlot @relation(fields: [scheduleSlotId], references: [id], onDelete: Cascade)
   student           Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
   substituteTeacher Teacher?     @relation("SubstituteTeacher", fields: [substituteTeacherId], references: [id], onDelete: SetNull)
+  assistantTeacher  Teacher?     @relation("AssistantTeacher", fields: [assistantTeacherId], references: [id], onDelete: SetNull)
 
   @@unique([scheduleSlotId, studentId, date])
+}
+
+// Методический час — ежедневная отметка
+model MethodistCheck {
+  id        String   @id @default(uuid())
+  teacherId String
+  date      String   // "2025-01-20"
+  completed Boolean  @default(true) // состоялся или нет
+
+  teacher Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@unique([teacherId, date])
 }
 
 // Оплаты от родителей
@@ -130,7 +161,6 @@ model Payment {
 }
 
 // Псевдонимы для импорта расписания из Google Sheets
-// Пример: alias="МаркВ И", type="student", entityId=<UUID ученика>
 model NameAlias {
   id        String   @id @default(uuid())
   alias     String   // как написано в таблице
