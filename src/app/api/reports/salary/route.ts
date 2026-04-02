@@ -24,7 +24,8 @@ export async function GET(request: NextRequest) {
           include: { members: { include: { student: true } } },
         },
         attendances: {
-          where: { isPresent: true },
+          where: { status: "ATTENDED" }, // ЗП только за ATTENDED
+          include: { substituteTeacher: true, student: true },
         },
       },
     });
@@ -41,7 +42,9 @@ export async function GET(request: NextRequest) {
         groupRate: number;
         individualTotal: number;
         groupTotal: number;
+        behavioralBonus: number;
         methodistBonus: number;
+        substitutionTotal: number;
         total: number;
         details: {
           day: number;
@@ -51,6 +54,8 @@ export async function GET(request: NextRequest) {
           hours: number;
           rate: number;
           sum: number;
+          isSubstitution: boolean;
+          behavioralExtra: number;
         }[];
       }
     >();
@@ -63,18 +68,7 @@ export async function GET(request: NextRequest) {
       weekDates.set(i + 1, d.toISOString().split("T")[0]);
     }
 
-    for (const slot of slots) {
-      const teacher = slot.teacher;
-      const dateForDay = weekDates.get(slot.dayOfWeek) || "";
-
-      // Проверяем, были ли ученики на этом занятии
-      const presentAttendances = slot.attendances.filter(
-        (a) => a.date === dateForDay && a.isPresent
-      );
-
-      // Если никого не было — пропускаем
-      if (presentAttendances.length === 0) continue;
-
+    function ensureEntry(teacher: { id: string; lastName: string; firstName: string; patronymic: string | null; individualRate: number; groupRate: number; behavioralBonus: number }) {
       if (!salaryMap.has(teacher.id)) {
         salaryMap.set(teacher.id, {
           teacherId: teacher.id,
@@ -85,19 +79,45 @@ export async function GET(request: NextRequest) {
           groupRate: teacher.groupRate,
           individualTotal: 0,
           groupTotal: 0,
+          behavioralBonus: 0,
           methodistBonus: 0,
+          substitutionTotal: 0,
           total: 0,
           details: [],
         });
       }
+      return salaryMap.get(teacher.id)!;
+    }
 
-      const entry = salaryMap.get(teacher.id)!;
-      const hours = 1; // 1 час за слот
+    for (const slot of slots) {
+      const dateForDay = weekDates.get(slot.dayOfWeek) || "";
+
+      const presentAttendances = slot.attendances.filter(
+        (a) => a.date === dateForDay && a.status === "ATTENDED"
+      );
+
+      if (presentAttendances.length === 0) continue;
+
+      // Определяем кто реально вёл урок (замена?)
+      const firstAtt = presentAttendances[0];
+      const isSubstitution = firstAtt.isSubstitution && firstAtt.substituteTeacher;
+      const actualTeacher = isSubstitution ? firstAtt.substituteTeacher! : slot.teacher;
+
+      const entry = ensureEntry(actualTeacher);
+      const hours = 1;
       const rate =
         slot.lessonType === "INDIVIDUAL"
-          ? teacher.individualRate
-          : teacher.groupRate;
+          ? actualTeacher.individualRate
+          : actualTeacher.groupRate;
       const sum = hours * rate;
+
+      // Доплата за поведенческих
+      let behavioralExtra = 0;
+      for (const att of presentAttendances) {
+        if (att.student.isBehavioral && actualTeacher.behavioralBonus > 0) {
+          behavioralExtra += actualTeacher.behavioralBonus;
+        }
+      }
 
       let description = "";
       if (slot.lessonType === "INDIVIDUAL" && slot.student) {
@@ -110,6 +130,13 @@ export async function GET(request: NextRequest) {
         entry.groupTotal += sum;
       }
 
+      if (isSubstitution) {
+        entry.substitutionTotal += sum;
+        description += " (замена)";
+      }
+
+      entry.behavioralBonus += behavioralExtra;
+
       entry.details.push({
         day: slot.dayOfWeek,
         time: slot.startTime,
@@ -117,10 +144,16 @@ export async function GET(request: NextRequest) {
         description,
         hours,
         rate,
-        sum,
+        sum: sum + behavioralExtra,
+        isSubstitution: !!isSubstitution,
+        behavioralExtra,
       });
 
-      entry.total = entry.individualTotal + entry.groupTotal;
+      entry.total =
+        entry.individualTotal +
+        entry.groupTotal +
+        entry.behavioralBonus +
+        entry.methodistBonus;
     }
 
     // Добавляем методический бонус для методистов
@@ -130,25 +163,13 @@ export async function GET(request: NextRequest) {
 
     for (const teacher of allTeachers) {
       if (teacher.methodistWeeklyRate > 0) {
-        const key = teacher.id;
-        if (!salaryMap.has(key)) {
-          salaryMap.set(key, {
-            teacherId: teacher.id,
-            teacherName: `${teacher.lastName} ${teacher.firstName} ${teacher.patronymic || ""}`.trim(),
-            individualHours: 0,
-            groupHours: 0,
-            individualRate: teacher.individualRate,
-            groupRate: teacher.groupRate,
-            individualTotal: 0,
-            groupTotal: 0,
-            methodistBonus: 0,
-            total: 0,
-            details: [],
-          });
-        }
-        const entry = salaryMap.get(key)!;
+        const entry = ensureEntry(teacher);
         entry.methodistBonus = teacher.methodistWeeklyRate;
-        entry.total = entry.individualTotal + entry.groupTotal + entry.methodistBonus;
+        entry.total =
+          entry.individualTotal +
+          entry.groupTotal +
+          entry.behavioralBonus +
+          entry.methodistBonus;
       }
     }
 

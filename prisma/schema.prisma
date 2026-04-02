@@ -15,6 +15,7 @@ model Teacher {
   phone          String?
   individualRate      Int      @default(0) // тенге/час за индивидуальное занятие
   groupRate           Int      @default(0) // тенге/час за групповое занятие
+  behavioralBonus     Int      @default(0) // доплата за поведенческого ребёнка (тенге/час)
   room                String?  // кабинет по умолчанию ("Каб.1", "Спортзал")
   specialization      String?  // "И" (интенсив), "А" (академ), etc.
   isMethodist         Boolean  @default(false)
@@ -25,23 +26,26 @@ model Teacher {
 
   groups        Group[]
   scheduleSlots ScheduleSlot[]
+  substitutions Attendance[]   @relation("SubstituteTeacher") // замены
 }
 
 model Student {
-  id          String   @id @default(uuid())
-  lastName    String
-  firstName   String
-  patronymic  String?
-  parentName  String?
-  parentPhone String?
-  hourlyRate  Int      @default(0) // стоимость часа для родителя (тенге)
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id @default(uuid())
+  lastName      String
+  firstName     String
+  patronymic    String?
+  parentName    String?
+  parentPhone   String?
+  hourlyRate    Int      @default(0) // стоимость часа для родителя (тенге)
+  isBehavioral  Boolean  @default(false) // поведенческий ребёнок (доплата педагогу)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   groupMembers  GroupMember[]
   scheduleSlots ScheduleSlot[]
   attendances   Attendance[]
+  payments      Payment[]
 }
 
 model Group {
@@ -87,18 +91,42 @@ model ScheduleSlot {
   attendances Attendance[]
 }
 
+// Статусы посещаемости:
+// ATTENDED — урок состоялся (педагог ✅, родитель ✅)
+// SICK — больничный (педагог ❌, родитель ❌)
+// LATE — опоздание ребёнка (педагог ❌, родитель ✅)
+// ABSENT — просто не был (педагог ❌, родитель ❌)
+
 model Attendance {
   id             String   @id @default(uuid())
   scheduleSlotId String
   studentId      String
   date           String // "2025-01-20"
-  isPresent      Boolean  @default(false)
+  status         String   @default("ABSENT") // ATTENDED | SICK | LATE | ABSENT
+  isPresent      Boolean  @default(false) // legacy, kept for backwards compat — true = ATTENDED
   markedAt       DateTime?
 
-  scheduleSlot ScheduleSlot @relation(fields: [scheduleSlotId], references: [id], onDelete: Cascade)
-  student      Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  // Замена педагога
+  isSubstitution      Boolean  @default(false) // была замена?
+  substituteTeacherId String?  // кто реально провёл урок
+
+  scheduleSlot      ScheduleSlot @relation(fields: [scheduleSlotId], references: [id], onDelete: Cascade)
+  student           Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  substituteTeacher Teacher?     @relation("SubstituteTeacher", fields: [substituteTeacherId], references: [id], onDelete: SetNull)
 
   @@unique([scheduleSlotId, studentId, date])
+}
+
+// Оплаты от родителей
+model Payment {
+  id        String   @id @default(uuid())
+  studentId String
+  amount    Int      // сумма оплаты (тенге)
+  date      String   // "2025-01-20" — дата оплаты
+  note      String?  // комментарий
+  createdAt DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
 // Псевдонимы для импорта расписания из Google Sheets

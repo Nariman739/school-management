@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 // GET /api/reports/billing?weekStart=2025-01-20
+// Родитель платит за: ATTENDED + LATE (опоздание)
+// Родитель НЕ платит за: SICK (больничный) + ABSENT
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -14,7 +16,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Получаем все записи посещаемости за неделю (только присутствовавшие)
     const slots = await prisma.scheduleSlot.findMany({
       where: { weekStartDate: weekStart },
       include: {
@@ -24,7 +25,7 @@ export async function GET(request: NextRequest) {
           include: { members: { include: { student: true } } },
         },
         attendances: {
-          where: { isPresent: true },
+          where: { status: { in: ["ATTENDED", "LATE"] } },
           include: { student: true },
         },
       },
@@ -38,7 +39,6 @@ export async function GET(request: NextRequest) {
       weekDates.set(i + 1, d.toISOString().split("T")[0]);
     }
 
-    // Считаем счёт по ученикам
     const billingMap = new Map<
       string,
       {
@@ -54,6 +54,7 @@ export async function GET(request: NextRequest) {
           time: string;
           teacherName: string;
           type: string;
+          status: string;
         }[];
       }
     >();
@@ -88,6 +89,7 @@ export async function GET(request: NextRequest) {
           time: slot.startTime,
           teacherName: `${slot.teacher.lastName} ${slot.teacher.firstName}`,
           type: slot.lessonType,
+          status: attendance.status,
         });
       }
     }
