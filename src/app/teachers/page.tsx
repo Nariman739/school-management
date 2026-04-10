@@ -47,6 +47,9 @@ interface Teacher {
   groupRate3: number;
   groupRate5: number;
   assistantRate: number;
+  accompanimentRate: number;
+  pairRate: number;
+  saturdayRate: number;
   morningBonusRate: number;
   eveningBonusRate: number;
   behavioralBonus: number;
@@ -67,6 +70,9 @@ interface TeacherFormData {
   groupRate3: string;
   groupRate5: string;
   assistantRate: string;
+  accompanimentRate: string;
+  pairRate: string;
+  saturdayRate: string;
   morningBonusRate: string;
   eveningBonusRate: string;
   behavioralBonus: string;
@@ -86,6 +92,9 @@ const emptyForm: TeacherFormData = {
   groupRate3: "0",
   groupRate5: "0",
   assistantRate: "0",
+  accompanimentRate: "0",
+  pairRate: "0",
+  saturdayRate: "0",
   morningBonusRate: "0",
   eveningBonusRate: "0",
   behavioralBonus: "0",
@@ -147,6 +156,9 @@ export default function TeachersPage() {
       groupRate3: String(teacher.groupRate3 ?? 0),
       groupRate5: String(teacher.groupRate5 ?? 0),
       assistantRate: String(teacher.assistantRate ?? 0),
+      accompanimentRate: String(teacher.accompanimentRate ?? 0),
+      pairRate: String(teacher.pairRate ?? 0),
+      saturdayRate: String(teacher.saturdayRate ?? 0),
       morningBonusRate: String(teacher.morningBonusRate ?? 0),
       eveningBonusRate: String(teacher.eveningBonusRate ?? 0),
       behavioralBonus: String(teacher.behavioralBonus ?? 0),
@@ -178,6 +190,9 @@ export default function TeachersPage() {
         groupRate3: parseInt(formData.groupRate3, 10) || 0,
         groupRate5: parseInt(formData.groupRate5, 10) || 0,
         assistantRate: parseInt(formData.assistantRate, 10) || 0,
+        accompanimentRate: parseInt(formData.accompanimentRate, 10) || 0,
+        pairRate: parseInt(formData.pairRate, 10) || 0,
+        saturdayRate: parseInt(formData.saturdayRate, 10) || 0,
         morningBonusRate: parseInt(formData.morningBonusRate, 10) || 0,
         eveningBonusRate: parseInt(formData.eveningBonusRate, 10) || 0,
         behavioralBonus: parseInt(formData.behavioralBonus, 10) || 0,
@@ -485,6 +500,33 @@ export default function TeachersPage() {
                 <Input id="assistantRate" className="col-span-3" type="number" min="0"
                   value={formData.assistantRate}
                   onChange={(e) => setFormData((prev) => ({ ...prev, assistantRate: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="accompanimentRate" className="text-right">
+                  Сопровождение (₸)
+                </Label>
+                <Input id="accompanimentRate" className="col-span-3" type="number" min="0"
+                  value={formData.accompanimentRate}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, accompanimentRate: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="pairRate" className="text-right">
+                  Ставка парного (₸)
+                </Label>
+                <Input id="pairRate" className="col-span-3" type="number" min="0"
+                  value={formData.pairRate}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, pairRate: e.target.value }))}
+                />
+              </div>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="saturdayRate" className="text-right">
+                  Субботняя ставка (₸)
+                </Label>
+                <Input id="saturdayRate" className="col-span-3" type="number" min="0"
+                  value={formData.saturdayRate}
+                  onChange={(e) => setFormData((prev) => ({ ...prev, saturdayRate: e.target.value }))}
                 />
               </div>
               <div className="grid grid-cols-4 items-center gap-4">

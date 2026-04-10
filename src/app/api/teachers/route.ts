@@ -29,6 +29,15 @@ export async function POST(request: NextRequest) {
       phone,
       individualRate,
       groupRate,
+      groupRate3,
+      groupRate5,
+      assistantRate,
+      accompanimentRate,
+      pairRate,
+      saturdayRate,
+      morningBonusRate,
+      eveningBonusRate,
+      behavioralBonus,
       room,
       specialization,
       isMethodist,
@@ -42,20 +51,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const parseRate = (v: unknown) => (v ? parseInt(String(v), 10) : 0);
+
     const teacher = await prisma.teacher.create({
       data: {
         lastName,
         firstName,
         patronymic: patronymic || null,
         phone: phone || null,
-        individualRate: individualRate ? parseInt(String(individualRate), 10) : 0,
-        groupRate: groupRate ? parseInt(String(groupRate), 10) : 0,
+        individualRate: parseRate(individualRate),
+        groupRate: parseRate(groupRate),
+        groupRate3: parseRate(groupRate3),
+        groupRate5: parseRate(groupRate5),
+        assistantRate: parseRate(assistantRate),
+        accompanimentRate: parseRate(accompanimentRate),
+        pairRate: parseRate(pairRate),
+        saturdayRate: parseRate(saturdayRate),
+        morningBonusRate: parseRate(morningBonusRate),
+        eveningBonusRate: parseRate(eveningBonusRate),
+        behavioralBonus: parseRate(behavioralBonus),
         room: room || null,
         specialization: specialization || null,
         isMethodist: Boolean(isMethodist),
-        methodistWeeklyRate: methodistWeeklyRate
-          ? parseInt(String(methodistWeeklyRate), 10)
-          : 0,
+        methodistWeeklyRate: parseRate(methodistWeeklyRate),
+        methodistDailyRate: methodistWeeklyRate ? Math.round(parseRate(methodistWeeklyRate) / 5) : 0,
       },
     });
 

@@ -20,6 +20,9 @@ model Teacher {
   groupRate3          Int      @default(0) // ставка за группу из 3 детей
   groupRate5          Int      @default(0) // ставка за группу из 5 детей
   assistantRate       Int      @default(0) // ставка когда работает ассистентом
+  accompanimentRate   Int      @default(0) // ставка сопровождения (900-1000₸)
+  pairRate            Int      @default(0) // ставка парного занятия
+  saturdayRate        Int      @default(0) // субботняя ставка
 
   // Повышенные ставки по времени суток
   morningBonusRate    Int      @default(0) // доплата за утренние часы (9:00-10:00)
@@ -53,6 +56,7 @@ model Student {
   parentPhone   String?
   hourlyRate    Int      @default(0) // стоимость часа для родителя (тенге)
   isBehavioral  Boolean  @default(false) // поведенческий ребёнок (доплата педагогу)
+  scheduleType  String?  // "Интенсив", "ПН-СР-ПТ", "ВТ-ЧТ", "Суббота", "МНО рус", "МНО каз"
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
