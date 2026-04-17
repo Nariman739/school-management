@@ -28,11 +28,13 @@ interface SalaryEntry {
   teacherName: string;
   individualHours: number;
   groupHours: number;
-  individualRate: number;
-  groupRate: number;
   individualTotal: number;
   groupTotal: number;
+  behavioralBonus: number;
+  timeBonusTotal: number;
+  assistantTotal: number;
   methodistBonus: number;
+  substitutionTotal: number;
   total: number;
   details: SalaryDetail[];
 }
@@ -118,11 +120,11 @@ export default function SalaryReportPage() {
                   </CardTitle>
                   <div className="flex items-center gap-6 text-sm">
                     <span className="text-blue-600">
-                      Инд: {entry.individualHours}ч × {entry.individualRate.toLocaleString()} ₸ ={" "}
+                      Инд: {entry.individualHours}ч ={" "}
                       {entry.individualTotal.toLocaleString()} ₸
                     </span>
                     <span className="text-green-600">
-                      Груп: {entry.groupHours}ч × {entry.groupRate.toLocaleString()} ₸ ={" "}
+                      Груп: {entry.groupHours}ч ={" "}
                       {entry.groupTotal.toLocaleString()} ₸
                     </span>
                     {entry.methodistBonus > 0 && (
