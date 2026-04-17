@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // PUT /api/schedule/[id] — обновить слот
 export async function PUT(
@@ -100,6 +101,8 @@ export async function PUT(
       },
     });
 
+    await logAudit({ entityType: "ScheduleSlot", entityId: id, action: "UPDATE" });
+
     return NextResponse.json(slot);
   } catch (error) {
     console.error("Ошибка при обновлении слота:", error);
@@ -119,6 +122,7 @@ export async function DELETE(
     const { id } = await params;
 
     await prisma.scheduleSlot.delete({ where: { id } });
+    await logAudit({ entityType: "ScheduleSlot", entityId: id, action: "DELETE" });
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Ошибка при удалении слота:", error);

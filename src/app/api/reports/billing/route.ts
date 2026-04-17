@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getParentPayStatuses } from "@/lib/billing-rules";
 
 // GET /api/reports/billing?weekStart=2025-01-20
-// Родитель платит за: ATTENDED + LATE (опоздание)
-// Родитель НЕ платит за: SICK (больничный) + ABSENT
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -25,7 +24,7 @@ export async function GET(request: NextRequest) {
           include: { members: { include: { student: true } } },
         },
         attendances: {
-          where: { status: { in: ["ATTENDED", "LATE"] } },
+          where: { status: { in: getParentPayStatuses() } },
           include: { student: true },
         },
       },

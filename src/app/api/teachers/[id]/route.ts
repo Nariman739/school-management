@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 export async function PUT(
   request: NextRequest,
@@ -75,6 +76,8 @@ export async function PUT(
       },
     });
 
+    await logAudit({ entityType: "Teacher", entityId: id, action: "UPDATE" });
+
     return NextResponse.json(teacher);
   } catch (error) {
     console.error("Ошибка при обновлении учителя:", error);
@@ -105,6 +108,8 @@ export async function DELETE(
       where: { id },
       data: { isActive: false },
     });
+
+    await logAudit({ entityType: "Teacher", entityId: id, action: "DELETE" });
 
     return NextResponse.json({ success: true });
   } catch (error) {

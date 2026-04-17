@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTeacherPaidStatuses } from "@/lib/billing-rules";
 import {
@@ -11,15 +11,18 @@ import {
   getWeekDates,
   type SalaryEntry,
 } from "@/lib/salary-calc";
+import { generateExcel, excelResponse } from "@/lib/excel-export";
 
-// GET /api/reports/salary?weekStart=2025-01-20
+const DAYS = ["", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+
+// GET /api/reports/salary/export?weekStart=2025-01-20
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const weekStart = searchParams.get("weekStart");
 
     if (!weekStart) {
-      return NextResponse.json({ error: "weekStart обязателен" }, { status: 400 });
+      return new Response("weekStart обязателен", { status: 400 });
     }
 
     const paidStatuses = getTeacherPaidStatuses();
@@ -54,7 +57,6 @@ export async function GET(request: NextRequest) {
       );
       if (presentAttendances.length === 0) continue;
 
-      // Кто реально вёл урок
       const firstAtt = presentAttendances[0];
       const isSubstitution = firstAtt.isSubstitution && firstAtt.substituteTeacher;
       const actualTeacher = isSubstitution ? firstAtt.substituteTeacher! : slot.teacher;
@@ -62,7 +64,6 @@ export async function GET(request: NextRequest) {
       const entry = ensureEntry(actualTeacher);
       const hours = 1;
 
-      // Ставка: индивидуальная или групповая
       let rate: number;
       if (slot.lessonType === "INDIVIDUAL") {
         rate = actualTeacher.individualRate;
@@ -112,7 +113,6 @@ export async function GET(request: NextRequest) {
 
       recalcTotal(entry);
 
-      // Ассистент
       const assistantTeacher = firstAtt.assistantTeacher;
       if (assistantTeacher) {
         const assistEntry = ensureEntry(assistantTeacher);
@@ -174,21 +174,109 @@ export async function GET(request: NextRequest) {
     for (const teacher of allMethodists) {
       if (teacher.methodistWeeklyRate > 0) {
         const entry = ensureEntry(teacher);
-        entry.methodistBonus = calculateMethodistBonus(
-          teacher,
-          methodistDays.get(teacher.id)
-        );
+        entry.methodistBonus = calculateMethodistBonus(teacher, methodistDays.get(teacher.id));
         recalcTotal(entry);
       }
     }
 
-    const result = Array.from(salaryMap.values()).sort((a, b) =>
+    const entries = Array.from(salaryMap.values()).sort((a, b) =>
       a.teacherName.localeCompare(b.teacherName)
     );
 
-    return NextResponse.json(result);
+    // Формируем Excel — детальные строки по всем педагогам
+    const excelRows: Record<string, unknown>[] = [];
+    let grandTotal = 0;
+
+    for (const entry of entries) {
+      // Заголовок педагога
+      excelRows.push({
+        teacher: entry.teacherName,
+        day: "",
+        time: "",
+        description: "",
+        hours: "",
+        rate: "",
+        timeBonus: "",
+        behavioral: "",
+        sum: "",
+      });
+
+      for (const d of entry.details) {
+        excelRows.push({
+          teacher: "",
+          day: DAYS[d.day] || d.day,
+          time: d.time,
+          description: d.description,
+          hours: d.hours,
+          rate: d.rate,
+          timeBonus: d.timeBonus || "",
+          behavioral: d.behavioralExtra || "",
+          sum: d.sum,
+        });
+      }
+
+      if (entry.methodistBonus > 0) {
+        excelRows.push({
+          teacher: "",
+          day: "",
+          time: "",
+          description: "Методический час",
+          hours: "",
+          rate: "",
+          timeBonus: "",
+          behavioral: "",
+          sum: entry.methodistBonus,
+        });
+      }
+
+      // Итого по педагогу
+      excelRows.push({
+        teacher: "",
+        day: "",
+        time: "",
+        description: "ИТОГО",
+        hours: entry.individualHours + entry.groupHours,
+        rate: "",
+        timeBonus: entry.timeBonusTotal || "",
+        behavioral: entry.behavioralBonus || "",
+        sum: entry.total,
+      });
+
+      excelRows.push({}); // пустая строка
+      grandTotal += entry.total;
+    }
+
+    const buffer = generateExcel({
+      columns: [
+        { header: "Педагог", key: "teacher", width: 25 },
+        { header: "День", key: "day", width: 6 },
+        { header: "Время", key: "time", width: 8 },
+        { header: "Описание", key: "description", width: 30 },
+        { header: "Часы", key: "hours", width: 6 },
+        { header: "Ставка", key: "rate", width: 10 },
+        { header: "Бонус время", key: "timeBonus", width: 12 },
+        { header: "Поведенч.", key: "behavioral", width: 12 },
+        { header: "Сумма", key: "sum", width: 12 },
+      ],
+      rows: excelRows,
+      sheetName: "Зарплата",
+      title: `Зарплата за неделю ${weekStart}`,
+      totals: {
+        teacher: "",
+        day: "",
+        time: "",
+        description: "ОБЩИЙ ИТОГО",
+        hours: "",
+        rate: "",
+        timeBonus: "",
+        behavioral: "",
+        sum: grandTotal,
+      },
+    });
+
+    return excelResponse(buffer, `Зарплата_${weekStart}.xlsx`);
   } catch (error) {
-    console.error("Ошибка при расчёте зарплаты:", error);
-    return NextResponse.json({ error: "Не удалось рассчитать зарплату" }, { status: 500 });
+    console.error("Ошибка при экспорте зарплаты:", error);
+    return new Response("Ошибка экспорта", { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 export async function PUT(
   request: NextRequest,
@@ -56,6 +57,8 @@ export async function PUT(
       });
     });
 
+    await logAudit({ entityType: "Group", entityId: id, action: "UPDATE" });
+
     return NextResponse.json(group);
   } catch (error) {
     console.error("Ошибка при обновлении группы:", error);
@@ -82,6 +85,8 @@ export async function DELETE(
     }
 
     await prisma.group.delete({ where: { id } });
+
+    await logAudit({ entityType: "Group", entityId: id, action: "DELETE" });
 
     return NextResponse.json({ success: true });
   } catch (error) {

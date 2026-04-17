@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 export async function GET() {
   try {
@@ -51,6 +52,8 @@ export async function POST(request: NextRequest) {
         members: { include: { student: true } },
       },
     });
+
+    await logAudit({ entityType: "Group", entityId: group.id, action: "CREATE" });
 
     return NextResponse.json(group, { status: 201 });
   } catch (error) {

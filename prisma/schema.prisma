@@ -7,6 +7,21 @@ datasource db {
   provider = "postgresql"
 }
 
+// Пользователи системы (авторизация)
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         String   @default("ADMIN") // "ADMIN" | "DIRECTOR" | "TEACHER"
+  teacherId    String?  @unique // связь с Teacher для роли TEACHER
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  teacher Teacher? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+}
+
 model Teacher {
   id             String   @id @default(uuid())
   lastName       String
@@ -45,6 +60,7 @@ model Teacher {
   substitutions    Attendance[]     @relation("SubstituteTeacher")
   assistantSlots   Attendance[]     @relation("AssistantTeacher")
   methodistChecks  MethodistCheck[]
+  user             User?
 }
 
 model Student {
@@ -162,6 +178,21 @@ model Payment {
   createdAt DateTime @default(now())
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+// Журнал всех изменений в системе (audit trail)
+model AuditLog {
+  id         String   @id @default(uuid())
+  entityType String   // "Teacher", "Student", "ScheduleSlot", "Attendance", "Payment", etc.
+  entityId   String
+  action     String   // "CREATE", "UPDATE", "DELETE"
+  changes    Json?    // { field: { old: X, new: Y } }
+  userId     String?  // null пока нет авторизации
+  userName   String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
 }
 
 // Псевдонимы для импорта расписания из Google Sheets

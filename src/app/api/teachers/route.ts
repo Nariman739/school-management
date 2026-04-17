@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 export async function GET() {
   try {
@@ -77,6 +78,8 @@ export async function POST(request: NextRequest) {
         methodistDailyRate: methodistWeeklyRate ? Math.round(parseRate(methodistWeeklyRate) / 5) : 0,
       },
     });
+
+    await logAudit({ entityType: "Teacher", entityId: teacher.id, action: "CREATE" });
 
     return NextResponse.json(teacher, { status: 201 });
   } catch (error) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // POST /api/schedule/copy — скопировать расписание с одной недели на другую
 export async function POST(request: NextRequest) {
@@ -53,6 +54,8 @@ export async function POST(request: NextRequest) {
         room: slot.room,
       })),
     });
+
+    await logAudit({ entityType: "ScheduleSlot", entityId: toWeek, action: "CREATE", changes: { action: { old: null, new: "copy" }, fromWeek: { old: null, new: fromWeek }, count: { old: null, new: newSlots.count } } });
 
     return NextResponse.json(
       { message: `Скопировано ${newSlots.count} слотов`, count: newSlots.count },

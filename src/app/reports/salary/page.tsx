@@ -80,6 +80,15 @@ export default function SalaryReportPage() {
             →
           </Button>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            window.open(`/api/reports/salary/export?weekStart=${weekStart}`, "_blank");
+          }}
+        >
+          📥 Excel
+        </Button>
         <div className="ml-auto text-lg font-bold">
           Итого: {grandTotal.toLocaleString()} ₸
         </div>

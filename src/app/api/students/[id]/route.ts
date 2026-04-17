@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // PUT /api/students/[id] — update a student
 export async function PUT(
@@ -39,6 +40,8 @@ export async function PUT(
       },
     });
 
+    await logAudit({ entityType: "Student", entityId: id, action: "UPDATE" });
+
     return NextResponse.json(student);
   } catch (error) {
     console.error("Failed to update student:", error);
@@ -69,6 +72,8 @@ export async function DELETE(
       where: { id },
       data: { isActive: false },
     });
+
+    await logAudit({ entityType: "Student", entityId: id, action: "DELETE" });
 
     return NextResponse.json({ success: true });
   } catch (error) {

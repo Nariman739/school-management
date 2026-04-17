@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // GET /api/methodist?date=2025-01-20 — отметки методистов за дату
 export async function GET(request: NextRequest) {
@@ -60,6 +61,8 @@ export async function POST(request: NextRequest) {
       update: { completed },
       create: { teacherId, date, completed },
     });
+
+    await logAudit({ entityType: "MethodistCheck", entityId: check.id, action: "UPDATE", changes: { completed: { old: null, new: completed } } });
 
     return NextResponse.json(check);
   } catch (error) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // GET /api/payments?studentId=xxx — история оплат ученика
 // GET /api/payments — все оплаты (последние 100)
@@ -56,6 +57,8 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    await logAudit({ entityType: "Payment", entityId: payment.id, action: "CREATE", changes: { studentId: { old: null, new: studentId }, amount: { old: null, new: amount } } });
+
     return NextResponse.json(payment);
   } catch (error) {
     console.error("Ошибка при внесении оплаты:", error);
@@ -74,6 +77,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     await prisma.payment.delete({ where: { id } });
+    await logAudit({ entityType: "Payment", entityId: id, action: "DELETE" });
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("Ошибка при удалении оплаты:", error);

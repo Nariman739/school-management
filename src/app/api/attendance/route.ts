@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // GET /api/attendance?date=2025-01-20&teacherId=xxx
 export async function GET(request: NextRequest) {
@@ -166,6 +167,8 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    await logAudit({ entityType: "Attendance", entityId: attendance.id, action: "UPDATE", changes: { status: { old: null, new: status } } });
+
     return NextResponse.json(attendance);
   } catch (error) {
     console.error("Ошибка при отметке посещаемости:", error);
@@ -191,6 +194,7 @@ export async function PATCH(request: NextRequest) {
         where: { scheduleSlotId, date },
         data: { assistantTeacherId },
       });
+      await logAudit({ entityType: "Attendance", entityId: scheduleSlotId, action: "UPDATE", changes: { action: { old: null, new: "setAssistant" }, assistantTeacherId: { old: null, new: assistantTeacherId } } });
       return NextResponse.json({ updated: updated.count });
     }
 
@@ -199,6 +203,7 @@ export async function PATCH(request: NextRequest) {
         where: { scheduleSlotId, date },
         data: { assistantTeacherId: null },
       });
+      await logAudit({ entityType: "Attendance", entityId: scheduleSlotId, action: "UPDATE", changes: { action: { old: null, new: "removeAssistant" } } });
       return NextResponse.json({ updated: updated.count });
     }
 
@@ -208,6 +213,7 @@ export async function PATCH(request: NextRequest) {
         where: { scheduleSlotId, date },
         data: { isSubstitution: true, substituteTeacherId },
       });
+      await logAudit({ entityType: "Attendance", entityId: scheduleSlotId, action: "UPDATE", changes: { action: { old: null, new: "substitute" }, substituteTeacherId: { old: null, new: substituteTeacherId } } });
       return NextResponse.json({ updated: updated.count });
     }
 

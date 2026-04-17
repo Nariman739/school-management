@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // GET /api/schedule?weekStart=2025-01-20&teacherId=xxx
 export async function GET(request: NextRequest) {
@@ -204,6 +205,8 @@ export async function POST(request: NextRequest) {
         },
       },
     });
+
+    await logAudit({ entityType: "ScheduleSlot", entityId: slot.id, action: "CREATE" });
 
     return NextResponse.json(slot, { status: 201 });
   } catch (error) {

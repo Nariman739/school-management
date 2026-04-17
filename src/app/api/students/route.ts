@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 
 // GET /api/students — list all active students
 export async function GET() {
@@ -42,6 +43,8 @@ export async function POST(request: NextRequest) {
         hourlyRate: hourlyRate ? parseInt(String(hourlyRate), 10) : 0,
       },
     });
+
+    await logAudit({ entityType: "Student", entityId: student.id, action: "CREATE" });
 
     return NextResponse.json(student, { status: 201 });
   } catch (error) {

@@ -74,6 +74,15 @@ export default function BillingReportPage() {
             →
           </Button>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            window.open(`/api/reports/billing/export?weekStart=${weekStart}`, "_blank");
+          }}
+        >
+          📥 Excel
+        </Button>
         <div className="ml-auto text-lg font-bold">
           Итого: {grandTotal.toLocaleString()} ₸
         </div>
