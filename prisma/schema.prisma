@@ -61,6 +61,7 @@ model Teacher {
   assistantSlots   Attendance[]     @relation("AssistantTeacher")
   methodistChecks  MethodistCheck[]
   user             User?
+  freezes          ScheduleFreeze[]
 }
 
 model Student {
@@ -81,6 +82,7 @@ model Student {
   scheduleSlots ScheduleSlot[]
   attendances   Attendance[]
   payments      Payment[]
+  freezes       ScheduleFreeze[]
 }
 
 model Group {
@@ -120,10 +122,30 @@ model ScheduleSlot {
   lessonCategory String? // "А", "И", "Тех", "СОПР", "Метод"
   room           String? // кабинет для этого занятия
 
+  // Отмена / перенос
+  isCancelled    Boolean  @default(false)
+  cancelReason   String?
+
   teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   student     Student?     @relation(fields: [studentId], references: [id], onDelete: SetNull)
   group       Group?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
   attendances Attendance[]
+}
+
+// Заморозка расписания (каникулы и т.д.)
+model ScheduleFreeze {
+  id         String   @id @default(uuid())
+  studentId  String?  // null = весь центр
+  teacherId  String?  // null = все педагоги
+  startDate  String   // "2025-06-01"
+  endDate    String   // "2025-06-15"
+  reason     String
+  createdAt  DateTime @default(now())
+
+  student Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  teacher Teacher? @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  @@index([startDate, endDate])
 }
 
 // Статусы посещаемости:

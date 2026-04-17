@@ -136,6 +136,12 @@ export default function SchedulePage() {
   const [formRoom, setFormRoom] = useState("");
   const [error, setError] = useState("");
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [extendDialogOpen, setExtendDialogOpen] = useState(false);
+  const [extendWeeks, setExtendWeeks] = useState(4);
+  const [freezeDialogOpen, setFreezeDialogOpen] = useState(false);
+  const [freezeStart, setFreezeStart] = useState("");
+  const [freezeEnd, setFreezeEnd] = useState("");
+  const [freezeReason, setFreezeReason] = useState("");
 
   // Импорт из Google Sheets
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -284,6 +290,47 @@ export default function SchedulePage() {
       fetchSlots();
     }
     setCopyDialogOpen(false);
+  };
+
+  const handleExtend = async () => {
+    const res = await fetch("/api/schedule/extend", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fromWeek: weekStart, weeks: extendWeeks }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || "Ошибка");
+    } else {
+      const msg = data.skippedWeeks?.length > 0
+        ? `Создано ${data.totalCreated} слотов. Пропущено ${data.skippedWeeks.length} недель (уже есть расписание).`
+        : `Создано ${data.totalCreated} слотов на ${extendWeeks} недель вперёд.`;
+      alert(msg);
+    }
+    setExtendDialogOpen(false);
+  };
+
+  const handleFreeze = async () => {
+    if (!freezeStart || !freezeEnd || !freezeReason) {
+      alert("Заполните все поля");
+      return;
+    }
+    const res = await fetch("/api/schedule/freeze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ startDate: freezeStart, endDate: freezeEnd, reason: freezeReason }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(data.error || "Ошибка");
+    } else {
+      alert(`Заморозка создана. Отменено ${data.cancelled} занятий.`);
+      fetchSlots();
+    }
+    setFreezeDialogOpen(false);
+    setFreezeStart("");
+    setFreezeEnd("");
+    setFreezeReason("");
   };
 
   const openImportDialog = () => {
@@ -495,6 +542,12 @@ export default function SchedulePage() {
           </Button>
           <Button variant="outline" onClick={() => setCopyDialogOpen(true)}>
             Копировать с пред. недели
+          </Button>
+          <Button variant="outline" onClick={() => setExtendDialogOpen(true)}>
+            Продлить
+          </Button>
+          <Button variant="outline" onClick={() => setFreezeDialogOpen(true)}>
+            Заморозка
           </Button>
         </div>
       </div>
@@ -1106,6 +1159,83 @@ export default function SchedulePage() {
             <Button onClick={handleSaveAliases}>
               Сохранить ({pendingAliases.length})
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог продления */}
+      <Dialog open={extendDialogOpen} onOpenChange={setExtendDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Продлить расписание</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Скопировать расписание с текущей недели ({formatWeekRange(weekStart)}) на следующие недели.
+              Недели с существующим расписанием будут пропущены.
+            </p>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Количество недель</label>
+              <select
+                className="w-full rounded border px-3 py-2"
+                value={extendWeeks}
+                onChange={(e) => setExtendWeeks(Number(e.target.value))}
+              >
+                {[1, 2, 3, 4, 5, 6, 8, 10, 12].map((w) => (
+                  <option key={w} value={w}>{w} {w === 1 ? "неделя" : w < 5 ? "недели" : "недель"}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setExtendDialogOpen(false)}>Отмена</Button>
+              <Button onClick={handleExtend}>Продлить</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог заморозки */}
+      <Dialog open={freezeDialogOpen} onOpenChange={setFreezeDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Заморозка расписания</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Все занятия в указанном периоде будут отменены. Используйте для каникул или перерывов.
+            </p>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Начало</label>
+              <input
+                type="date"
+                className="w-full rounded border px-3 py-2"
+                value={freezeStart}
+                onChange={(e) => setFreezeStart(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Конец</label>
+              <input
+                type="date"
+                className="w-full rounded border px-3 py-2"
+                value={freezeEnd}
+                onChange={(e) => setFreezeEnd(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Причина</label>
+              <input
+                type="text"
+                className="w-full rounded border px-3 py-2"
+                placeholder="Каникулы, перерыв и т.д."
+                value={freezeReason}
+                onChange={(e) => setFreezeReason(e.target.value)}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setFreezeDialogOpen(false)}>Отмена</Button>
+              <Button onClick={handleFreeze}>Заморозить</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
