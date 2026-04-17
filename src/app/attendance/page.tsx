@@ -18,19 +18,24 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-type AttendanceStatus = "ATTENDED" | "SICK" | "LATE" | "ABSENT";
+type AttendanceStatus = "ATTENDED" | "ABSENT_NO_REASON" | "ABSENT_VALID_REASON" | "SICK" | "TRANSFERRED" | "MAKEUP" | "LATE" | "ABSENT";
 
 const STATUS_CONFIG: Record<
-  AttendanceStatus,
+  string,
   { label: string; short: string; color: string; bg: string }
 > = {
-  ATTENDED: { label: "Урок состоялся", short: "Был", color: "text-green-700", bg: "bg-green-100 hover:bg-green-200" },
-  SICK: { label: "Больничный", short: "Больничный", color: "text-yellow-700", bg: "bg-yellow-100 hover:bg-yellow-200" },
+  ATTENDED: { label: "Присутствовал", short: "Был", color: "text-green-700", bg: "bg-green-100 hover:bg-green-200" },
+  ABSENT_NO_REASON: { label: "Без причины", short: "Без причины", color: "text-red-700", bg: "bg-red-100 hover:bg-red-200" },
+  ABSENT_VALID_REASON: { label: "Уважительная", short: "Уважит.", color: "text-yellow-700", bg: "bg-yellow-100 hover:bg-yellow-200" },
+  SICK: { label: "Больничный", short: "Больничный", color: "text-blue-700", bg: "bg-blue-100 hover:bg-blue-200" },
+  TRANSFERRED: { label: "Перенос", short: "Перенос", color: "text-purple-700", bg: "bg-purple-100 hover:bg-purple-200" },
+  MAKEUP: { label: "Отработка", short: "Отработка", color: "text-teal-700", bg: "bg-teal-100 hover:bg-teal-200" },
+  // Legacy
   LATE: { label: "Опоздание", short: "Опоздал", color: "text-orange-700", bg: "bg-orange-100 hover:bg-orange-200" },
-  ABSENT: { label: "Не был", short: "Не был", color: "text-red-700", bg: "bg-red-100 hover:bg-red-200" },
+  ABSENT: { label: "Не был", short: "Не был", color: "text-gray-700", bg: "bg-gray-100 hover:bg-gray-200" },
 };
 
-const STATUS_ORDER: AttendanceStatus[] = ["ATTENDED", "LATE", "SICK", "ABSENT"];
+const STATUS_ORDER: AttendanceStatus[] = ["ATTENDED", "ABSENT_NO_REASON", "ABSENT_VALID_REASON", "SICK", "TRANSFERRED", "MAKEUP"];
 
 interface Teacher { id: string; lastName: string; firstName: string; }
 interface AttendanceStudent {
@@ -205,9 +210,9 @@ export default function AttendancePage() {
   const dayName = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"][new Date(date).getDay()];
 
   const totalStudents = attendanceData.reduce((a, s) => a + s.students.length, 0);
-  const attendedStudents = attendanceData.reduce((a, s) => a + s.students.filter((st) => st.status === "ATTENDED").length, 0);
+  const attendedStudents = attendanceData.reduce((a, s) => a + s.students.filter((st) => st.status === "ATTENDED" || st.status === "MAKEUP").length, 0);
   const sickStudents = attendanceData.reduce((a, s) => a + s.students.filter((st) => st.status === "SICK").length, 0);
-  const lateStudents = attendanceData.reduce((a, s) => a + s.students.filter((st) => st.status === "LATE").length, 0);
+  const absentStudents = attendanceData.reduce((a, s) => a + s.students.filter((st) => st.status === "ABSENT_NO_REASON" || st.status === "ABSENT" || st.status === "ABSENT_VALID_REASON").length, 0);
 
   return (
     <div>
@@ -236,8 +241,8 @@ export default function AttendancePage() {
 
         <div className="ml-auto flex gap-3 text-sm text-gray-500">
           <span>Был: <strong className="text-green-600">{attendedStudents}</strong></span>
-          <span>Опоздал: <strong className="text-orange-600">{lateStudents}</strong></span>
-          <span>Больничный: <strong className="text-yellow-600">{sickStudents}</strong></span>
+          <span>Отсутствует: <strong className="text-red-600">{absentStudents}</strong></span>
+          <span>Больничный: <strong className="text-blue-600">{sickStudents}</strong></span>
           <span>Всего: {totalStudents}</span>
         </div>
       </div>

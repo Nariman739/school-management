@@ -131,6 +131,10 @@ export async function POST(request: NextRequest) {
       isSubstitution,
       substituteTeacherId,
       assistantTeacherId,
+      reason,
+      note,
+      transferredToDate,
+      makeupFromDate,
     } = body;
 
     if (!scheduleSlotId || !studentId || !date || !status) {
@@ -140,7 +144,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const isPresent = status === "ATTENDED";
+    const isPresent = status === "ATTENDED" || status === "MAKEUP";
 
     const attendance = await prisma.attendance.upsert({
       where: {
@@ -152,6 +156,10 @@ export async function POST(request: NextRequest) {
         isSubstitution: isSubstitution ?? false,
         substituteTeacherId: isSubstitution ? substituteTeacherId : null,
         assistantTeacherId: assistantTeacherId ?? null,
+        reason: reason ?? null,
+        note: note ?? null,
+        transferredToDate: status === "TRANSFERRED" ? (transferredToDate ?? null) : null,
+        makeupFromDate: status === "MAKEUP" ? (makeupFromDate ?? null) : null,
         markedAt: new Date(),
       },
       create: {
@@ -163,6 +171,10 @@ export async function POST(request: NextRequest) {
         isSubstitution: isSubstitution ?? false,
         substituteTeacherId: isSubstitution ? substituteTeacherId : null,
         assistantTeacherId: assistantTeacherId ?? null,
+        reason: reason ?? null,
+        note: note ?? null,
+        transferredToDate: status === "TRANSFERRED" ? (transferredToDate ?? null) : null,
+        makeupFromDate: status === "MAKEUP" ? (makeupFromDate ?? null) : null,
         markedAt: new Date(),
       },
     });

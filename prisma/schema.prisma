@@ -127,18 +127,21 @@ model ScheduleSlot {
 }
 
 // Статусы посещаемости:
-// ATTENDED — урок состоялся (педагог ✅, родитель ✅)
+// ATTENDED — присутствовал (педагог ✅, родитель ✅)
+// ABSENT_NO_REASON — без причины (педагог ❌, родитель ✅ штраф)
+// ABSENT_VALID_REASON — уважительная причина (педагог ❌, родитель ❌)
 // SICK — больничный (педагог ❌, родитель ❌)
-// LATE — опоздание ребёнка (педагог ❌, родитель ✅)
-// ABSENT — просто не был (педагог ❌, родитель ❌)
+// TRANSFERRED — перенос на другую дату (педагог ❌, родитель ❌)
+// MAKEUP — отработка (педагог ✅, родитель ✅)
+// Legacy: LATE, ABSENT — для старых данных
 
 model Attendance {
   id             String   @id @default(uuid())
   scheduleSlotId String
   studentId      String
   date           String // "2025-01-20"
-  status         String   @default("ABSENT") // ATTENDED | SICK | LATE | ABSENT
-  isPresent      Boolean  @default(false) // legacy — true = ATTENDED
+  status         String   @default("ABSENT_NO_REASON")
+  isPresent      Boolean  @default(false) // legacy
   markedAt       DateTime?
 
   // Замена педагога
@@ -146,7 +149,15 @@ model Attendance {
   substituteTeacherId String?
 
   // Ассистент
-  assistantTeacherId  String?  // кто был ассистентом на этом уроке
+  assistantTeacherId  String?
+
+  // Перенос
+  transferredToDate   String?  // дата на которую перенесён
+  makeupFromDate      String?  // от какой даты отработка
+
+  // Доп. информация
+  reason              String?  // причина (для уважительной/переноса)
+  note                String?  // комментарий администратора
 
   scheduleSlot      ScheduleSlot @relation(fields: [scheduleSlotId], references: [id], onDelete: Cascade)
   student           Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)

@@ -20,6 +20,7 @@ const navigation: NavItem[] = [
   { name: "Группы", href: "/groups", icon: "👥" },
   { name: "Расписание", href: "/schedule", icon: "📅" },
   { name: "Посещаемость", href: "/attendance", icon: "✅" },
+  { name: "Журнал замен", href: "/substitutions", icon: "🔄" },
   { name: "Оплата", href: "/payments", icon: "💳", roles: ["ADMIN", "DIRECTOR"] },
   { name: "Зарплата", href: "/reports/salary", icon: "💰" },
   { name: "Счёт родителям", href: "/reports/billing", icon: "🧾", roles: ["ADMIN", "DIRECTOR"] },
