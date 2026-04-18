@@ -93,7 +93,8 @@ model Student {
   freezes         ScheduleFreeze[]
   studentFreezes  StudentFreeze[]
   recalculations  Recalculation[]
-  tariffHistory   TariffHistory[]
+  tariffHistory      TariffHistory[]
+  parentInteractions ParentInteraction[]
 }
 
 // Заморозка ученика (больничный, каникулы)
@@ -276,6 +277,35 @@ model AuditLog {
 
   @@index([entityType, entityId])
   @@index([createdAt])
+}
+
+// Уведомления (in-app)
+model Notification {
+  id          String   @id @default(uuid())
+  type        String   // "DEBT_OVERDUE" | "LESSONS_ENDING" | "CONSECUTIVE_ABSENCES" | "SUBSTITUTION" | "ATTENDANCE_DROP"
+  entityType  String   // "Student" | "Teacher" | "ScheduleSlot"
+  entityId    String
+  title       String
+  message     String
+  isRead      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+// CRM — история взаимодействия с родителями
+model ParentInteraction {
+  id              String   @id @default(uuid())
+  studentId       String
+  type            String   // "CALL" | "MESSAGE" | "MEETING" | "PAYMENT_PROMISE" | "COMPLAINT"
+  date            String
+  note            String
+  promisedPayDate String?
+  promisedAmount  Int?
+  createdAt       DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
 // Псевдонимы для импорта расписания из Google Sheets

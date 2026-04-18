@@ -56,14 +56,22 @@ export default function StudentCardPage() {
   const [freezeForm, setFreezeForm] = useState({ startDate: "", endDate: "", reason: "", type: "OTHER" });
   const [recalcDialog, setRecalcDialog] = useState(false);
   const [recalcForm, setRecalcForm] = useState({ amount: "", reason: "", period: "" });
-  const [tab, setTab] = useState<"info" | "attendance" | "payments" | "freezes">("info");
+  const [tab, setTab] = useState<"info" | "attendance" | "payments" | "freezes" | "crm">("info");
+  const [interactions, setInteractions] = useState<{ id: string; type: string; date: string; note: string; promisedPayDate: string | null; promisedAmount: number | null }[]>([]);
+  const [crmDialog, setCrmDialog] = useState(false);
+  const [crmForm, setCrmForm] = useState({ type: "CALL", date: "", note: "", promisedPayDate: "", promisedAmount: "" });
 
   const fetchCard = useCallback(async () => {
     const res = await fetch(`/api/students/${id}/card`);
     if (res.ok) setData(await res.json());
   }, [id]);
 
-  useEffect(() => { fetchCard(); }, [fetchCard]);
+  const fetchInteractions = useCallback(async () => {
+    const res = await fetch(`/api/students/${id}/interactions`);
+    if (res.ok) setInteractions(await res.json());
+  }, [id]);
+
+  useEffect(() => { fetchCard(); fetchInteractions(); }, [fetchCard, fetchInteractions]);
 
   if (!data) return <div className="py-12 text-center text-gray-400">Загрузка...</div>;
 
@@ -90,6 +98,21 @@ export default function StudentCardPage() {
     setRecalcDialog(false);
     setRecalcForm({ amount: "", reason: "", period: "" });
     fetchCard();
+  };
+
+  const handleCrm = async () => {
+    await fetch(`/api/students/${id}/interactions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...crmForm,
+        promisedAmount: crmForm.promisedAmount ? parseInt(crmForm.promisedAmount) : null,
+        promisedPayDate: crmForm.promisedPayDate || null,
+      }),
+    });
+    setCrmDialog(false);
+    setCrmForm({ type: "CALL", date: "", note: "", promisedPayDate: "", promisedAmount: "" });
+    fetchInteractions();
   };
 
   const deleteFreeze = async (freezeId: string) => {
@@ -169,6 +192,7 @@ export default function StudentCardPage() {
           { key: "attendance", label: "Посещения" },
           { key: "payments", label: "Оплаты" },
           { key: "freezes", label: "Заморозки" },
+          { key: "crm", label: "CRM" },
         ].map((t) => (
           <button
             key={t.key}
@@ -363,6 +387,92 @@ export default function StudentCardPage() {
           </CardContent>
         </Card>
       )}
+
+      {tab === "crm" && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base">История взаимодействий с родителем</CardTitle>
+              <Button size="sm" onClick={() => setCrmDialog(true)}>+ Записать</Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {interactions.length === 0 ? (
+              <div className="text-sm text-gray-400">Нет записей. Нажмите "Записать" чтобы добавить.</div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Дата</TableHead>
+                    <TableHead>Тип</TableHead>
+                    <TableHead>Заметка</TableHead>
+                    <TableHead>Обещанная дата</TableHead>
+                    <TableHead>Сумма</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {interactions.map((i) => (
+                    <TableRow key={i.id}>
+                      <TableCell>{i.date}</TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">
+                          {i.type === "CALL" ? "Звонок" : i.type === "MESSAGE" ? "Сообщение" : i.type === "MEETING" ? "Встреча" : i.type === "PAYMENT_PROMISE" ? "Обещание" : "Жалоба"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{i.note}</TableCell>
+                      <TableCell>{i.promisedPayDate || "—"}</TableCell>
+                      <TableCell>{i.promisedAmount ? `${i.promisedAmount.toLocaleString()} ₸` : "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Диалог CRM */}
+      <Dialog open={crmDialog} onOpenChange={setCrmDialog}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Записать взаимодействие</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Тип</Label>
+              <select className="w-full rounded border px-3 py-2" value={crmForm.type} onChange={(e) => setCrmForm({ ...crmForm, type: e.target.value })}>
+                <option value="CALL">Звонок</option>
+                <option value="MESSAGE">Сообщение</option>
+                <option value="MEETING">Встреча</option>
+                <option value="PAYMENT_PROMISE">Обещание оплаты</option>
+                <option value="COMPLAINT">Жалоба</option>
+              </select>
+            </div>
+            <div>
+              <Label>Дата</Label>
+              <Input type="date" value={crmForm.date} onChange={(e) => setCrmForm({ ...crmForm, date: e.target.value })} />
+            </div>
+            <div>
+              <Label>Заметка</Label>
+              <Input value={crmForm.note} onChange={(e) => setCrmForm({ ...crmForm, note: e.target.value })} placeholder="Что обсуждали..." />
+            </div>
+            {crmForm.type === "PAYMENT_PROMISE" && (
+              <>
+                <div>
+                  <Label>Обещанная дата оплаты</Label>
+                  <Input type="date" value={crmForm.promisedPayDate} onChange={(e) => setCrmForm({ ...crmForm, promisedPayDate: e.target.value })} />
+                </div>
+                <div>
+                  <Label>Обещанная сумма</Label>
+                  <Input type="number" value={crmForm.promisedAmount} onChange={(e) => setCrmForm({ ...crmForm, promisedAmount: e.target.value })} placeholder="50000" />
+                </div>
+              </>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setCrmDialog(false)}>Отмена</Button>
+              <Button onClick={handleCrm}>Сохранить</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Диалог заморозки */}
       <Dialog open={freezeDialog} onOpenChange={setFreezeDialog}>
