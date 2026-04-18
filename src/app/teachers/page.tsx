@@ -275,10 +275,15 @@ export default function TeachersPage() {
         <CardHeader>
           <CardTitle className="text-2xl">Учителя</CardTitle>
           <CardAction>
-            <Button onClick={openCreateDialog}>
-              <Plus />
-              Добавить учителя
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => window.open("/api/teachers/export", "_blank")}>
+                📥 Excel
+              </Button>
+              <Button onClick={openCreateDialog}>
+                <Plus />
+                Добавить учителя
+              </Button>
+            </div>
           </CardAction>
         </CardHeader>
         <CardContent>

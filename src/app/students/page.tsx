@@ -190,7 +190,10 @@ export default function StudentsPage() {
     <div className="container mx-auto py-6 px-4">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">Ученики</h1>
-        <Button onClick={openCreateDialog}>Добавить ученика</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => window.open("/api/students/export", "_blank")}>📥 Excel</Button>
+          <Button onClick={openCreateDialog}>Добавить ученика</Button>
+        </div>
       </div>
 
       {error && !dialogOpen && (
@@ -225,7 +228,9 @@ export default function StudentsPage() {
               {students.map((student) => (
                 <TableRow key={student.id}>
                   <TableCell className="font-medium">
-                    {student.lastName}
+                    <a href={`/students/${student.id}`} className="text-blue-600 hover:underline">
+                      {student.lastName}
+                    </a>
                   </TableCell>
                   <TableCell>{student.firstName}</TableCell>
                   <TableCell className="text-muted-foreground">

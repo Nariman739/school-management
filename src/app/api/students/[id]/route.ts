@@ -11,7 +11,10 @@ export async function PUT(
     const { id } = await params;
     const body = await request.json();
 
-    const { lastName, firstName, patronymic, parentName, parentPhone, hourlyRate } = body;
+    const {
+      lastName, firstName, patronymic, parentName, parentPhone, hourlyRate,
+      tariffType, subscriptionRate, subscriptionLessons, enrollmentDate, notes, isBehavioral,
+    } = body;
 
     if (!lastName || !firstName) {
       return NextResponse.json(
@@ -28,6 +31,34 @@ export async function PUT(
       );
     }
 
+    const newHourlyRate = hourlyRate ? parseInt(String(hourlyRate), 10) : 0;
+    const newTariffType = tariffType || existing.tariffType;
+
+    // Если тариф изменился — сохраняем историю
+    if (newHourlyRate !== existing.hourlyRate || newTariffType !== existing.tariffType) {
+      // Закрываем текущий тариф
+      const openTariff = await prisma.tariffHistory.findFirst({
+        where: { studentId: id, effectiveTo: null },
+      });
+      if (openTariff) {
+        await prisma.tariffHistory.update({
+          where: { id: openTariff.id },
+          data: { effectiveTo: new Date().toISOString().split("T")[0] },
+        });
+      }
+
+      // Создаём новую запись
+      await prisma.tariffHistory.create({
+        data: {
+          studentId: id,
+          hourlyRate: newHourlyRate,
+          tariffType: newTariffType,
+          subscriptionRate: subscriptionRate ? parseInt(String(subscriptionRate), 10) : null,
+          effectiveFrom: new Date().toISOString().split("T")[0],
+        },
+      });
+    }
+
     const student = await prisma.student.update({
       where: { id },
       data: {
@@ -36,7 +67,13 @@ export async function PUT(
         patronymic: patronymic || null,
         parentName: parentName || null,
         parentPhone: parentPhone || null,
-        hourlyRate: hourlyRate ? parseInt(String(hourlyRate), 10) : 0,
+        hourlyRate: newHourlyRate,
+        tariffType: newTariffType,
+        subscriptionRate: subscriptionRate ? parseInt(String(subscriptionRate), 10) : null,
+        subscriptionLessons: subscriptionLessons ? parseInt(String(subscriptionLessons), 10) : null,
+        enrollmentDate: enrollmentDate || null,
+        notes: notes || null,
+        isBehavioral: isBehavioral !== undefined ? Boolean(isBehavioral) : existing.isBehavioral,
       },
     });
 

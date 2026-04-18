@@ -74,15 +74,65 @@ model Student {
   hourlyRate    Int      @default(0) // стоимость часа для родителя (тенге)
   isBehavioral  Boolean  @default(false) // поведенческий ребёнок (доплата педагогу)
   scheduleType  String?  // "Интенсив", "ПН-СР-ПТ", "ВТ-ЧТ", "Суббота", "МНО рус", "МНО каз"
+
+  // Тариф
+  tariffType          String   @default("PER_LESSON") // "PER_LESSON" | "SUBSCRIPTION"
+  subscriptionRate    Int?     // месячная стоимость абонемента
+  subscriptionLessons Int?     // кол-во занятий в абонементе
+  enrollmentDate      String?  // дата начала обучения
+  notes               String?  // заметки администратора
+
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  groupMembers  GroupMember[]
-  scheduleSlots ScheduleSlot[]
-  attendances   Attendance[]
-  payments      Payment[]
-  freezes       ScheduleFreeze[]
+  groupMembers    GroupMember[]
+  scheduleSlots   ScheduleSlot[]
+  attendances     Attendance[]
+  payments        Payment[]
+  freezes         ScheduleFreeze[]
+  studentFreezes  StudentFreeze[]
+  recalculations  Recalculation[]
+  tariffHistory   TariffHistory[]
+}
+
+// Заморозка ученика (больничный, каникулы)
+model StudentFreeze {
+  id        String   @id @default(uuid())
+  studentId String
+  startDate String
+  endDate   String
+  reason    String
+  type      String   @default("OTHER") // "SICK_LEAVE" | "VACATION" | "OTHER"
+  createdAt DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+// Перерасчёт
+model Recalculation {
+  id          String   @id @default(uuid())
+  studentId   String
+  amount      Int      // положительный = доначисление, отрицательный = возврат
+  reason      String
+  period      String   // "2025-01" — за какой месяц
+  createdAt   DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+// История изменения тарифа ученика
+model TariffHistory {
+  id                String   @id @default(uuid())
+  studentId         String
+  hourlyRate        Int
+  tariffType        String
+  subscriptionRate  Int?
+  effectiveFrom     String   // "2025-03-01"
+  effectiveTo       String?  // null = текущий
+  createdAt         DateTime @default(now())
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
 model Group {
