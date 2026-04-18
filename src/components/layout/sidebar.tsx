@@ -25,6 +25,7 @@ const navigation: NavItem[] = [
   { name: "Зарплата", href: "/reports/salary", icon: "💰" },
   { name: "Счёт родителям", href: "/reports/billing", icon: "🧾", roles: ["ADMIN", "DIRECTOR"] },
   { name: "Финансы", href: "/reports/financial", icon: "📊", roles: ["ADMIN", "DIRECTOR"] },
+  { name: "Аналитика", href: "/analytics", icon: "📈", roles: ["ADMIN", "DIRECTOR"] },
   { name: "Пользователи", href: "/admin/users", icon: "🔑", roles: ["ADMIN"] },
 ];
 
