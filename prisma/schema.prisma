@@ -7,6 +7,22 @@ datasource db {
   provider = "postgresql"
 }
 
+// Филиалы (мультифилиальность)
+model Branch {
+  id        String   @id @default(uuid())
+  name      String   // "Основной", "Филиал 2" и т.д.
+  address   String?
+  phone     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teachers      Teacher[]
+  students      Student[]
+  groups        Group[]
+  scheduleSlots ScheduleSlot[]
+}
+
 // Пользователи системы (авторизация)
 model User {
   id           String   @id @default(uuid())
@@ -28,6 +44,7 @@ model Teacher {
   firstName      String
   patronymic     String?
   phone          String?
+  branchId       String?  // филиал (null = все)
 
   // Ставки — базовые
   individualRate      Int      @default(0) // тенге/час за индивидуальное занятие
@@ -62,6 +79,7 @@ model Teacher {
   methodistChecks  MethodistCheck[]
   user             User?
   freezes          ScheduleFreeze[]
+  branch           Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 }
 
 model Student {
@@ -71,9 +89,10 @@ model Student {
   patronymic    String?
   parentName    String?
   parentPhone   String?
-  hourlyRate    Int      @default(0) // стоимость часа для родителя (тенге)
-  isBehavioral  Boolean  @default(false) // поведенческий ребёнок (доплата педагогу)
-  scheduleType  String?  // "Интенсив", "ПН-СР-ПТ", "ВТ-ЧТ", "Суббота", "МНО рус", "МНО каз"
+  hourlyRate    Int      @default(0)
+  isBehavioral  Boolean  @default(false)
+  scheduleType  String?
+  branchId      String?  // филиал
 
   // Тариф
   tariffType          String   @default("PER_LESSON") // "PER_LESSON" | "SUBSCRIPTION"
@@ -95,6 +114,7 @@ model Student {
   recalculations  Recalculation[]
   tariffHistory      TariffHistory[]
   parentInteractions ParentInteraction[]
+  branch             Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 }
 
 // Заморозка ученика (больничный, каникулы)
@@ -138,15 +158,17 @@ model TariffHistory {
 
 model Group {
   id        String   @id @default(uuid())
-  name      String // М0, М1, ГРМ1 и т.д.
-  groupType String? // "ГРМ", "М0", "М1", "ГР Реч", "ОНР", "АФК", "ЛФК"
+  name      String
+  groupType String?
   teacherId String
+  branchId  String?  // филиал
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   teacher       Teacher        @relation(fields: [teacherId], references: [id], onDelete: Cascade)
   members       GroupMember[]
   scheduleSlots ScheduleSlot[]
+  branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
 }
 
 model GroupMember {
@@ -173,11 +195,14 @@ model ScheduleSlot {
   lessonCategory String? // "А", "И", "Тех", "СОПР", "Метод"
   room           String? // кабинет для этого занятия
 
+  branchId       String?  // филиал
+
   // Отмена / перенос
   isCancelled    Boolean  @default(false)
   cancelReason   String?
 
   teacher     Teacher      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  branch      Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
   student     Student?     @relation(fields: [studentId], references: [id], onDelete: SetNull)
   group       Group?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
   attendances Attendance[]
@@ -306,6 +331,33 @@ model ParentInteraction {
   createdAt       DateTime @default(now())
 
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+}
+
+// Лист ожидания (резерв детей)
+model WaitlistEntry {
+  id                  String   @id @default(uuid())
+  childName           String   // ФИО ребёнка
+  age                 Int?     // возраст
+  parentName          String?
+  parentPhone         String?
+  direction           String?  // направление интереса
+  preferredDays       String?  // желаемые дни
+  preferredTime       String?  // желаемое время
+  preferredTeacher    String?  // предпочтительный педагог
+  branchId            String?  // филиал
+  level               String?  // уровень подготовки
+  specialNeeds        String?  // особенности развития
+  source              String?  // источник обращения
+  priority            String   @default("WARM") // "HOT" | "WARM" | "LOW"
+  probability         Int?     // вероятность выхода в оплату (0-100)
+  status              String   @default("WAITING") // "WAITING" | "TRIAL" | "CONVERTED" | "CANCELLED"
+  convertedStudentId  String?  // если перевели в ученики
+  note                String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([status])
+  @@index([priority])
 }
 
 // Псевдонимы для импорта расписания из Google Sheets

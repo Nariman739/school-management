@@ -27,6 +27,8 @@ const navigation: NavItem[] = [
   { name: "Финансы", href: "/reports/financial", icon: "📊", roles: ["ADMIN", "DIRECTOR"] },
   { name: "Аналитика", href: "/analytics", icon: "📈", roles: ["ADMIN", "DIRECTOR"] },
   { name: "Уведомления", href: "/notifications", icon: "🔔", roles: ["ADMIN", "DIRECTOR"] },
+  { name: "Лист ожидания", href: "/waitlist", icon: "📋", roles: ["ADMIN", "DIRECTOR"] },
+  { name: "Филиалы", href: "/branches", icon: "🏢", roles: ["ADMIN", "DIRECTOR"] },
   { name: "Пользователи", href: "/admin/users", icon: "🔑", roles: ["ADMIN"] },
 ];
 
