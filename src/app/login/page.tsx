@@ -20,19 +20,27 @@ export default function LoginPage() {
     setError("");
     setLoading(true);
 
-    const result = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-    });
+    try {
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+        callbackUrl: "/",
+      });
 
-    setLoading(false);
+      setLoading(false);
 
-    if (result?.error) {
-      setError("Неверный email или пароль");
-    } else {
-      router.push("/");
-      router.refresh();
+      if (result?.error) {
+        setError("Неверный email или пароль");
+      } else if (result?.ok) {
+        window.location.href = "/";
+      } else {
+        // Fallback — попробовать перейти
+        window.location.href = "/";
+      }
+    } catch {
+      setLoading(false);
+      window.location.href = "/";
     }
   }
 
