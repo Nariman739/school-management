@@ -187,13 +187,15 @@ export default function SchedulePage() {
     });
   }, []);
 
-  // Учителя, у которых есть слоты на этой неделе в текущей группе дней
-  const activeTeachers = teachers.filter((t) =>
+  // Показываем всех учителей: сначала тех у кого есть слоты на этой неделе,
+  // затем остальных активных — чтобы можно было добавить занятие в пустую колонку.
+  const teachersWithSlots = teachers.filter((t) =>
     slots.some((s) => s.teacherId === t.id)
   );
-
-  // Если нет слотов — показать всех учителей
-  const displayTeachers = activeTeachers.length > 0 ? activeTeachers : teachers;
+  const teachersWithoutSlots = teachers.filter(
+    (t) => !slots.some((s) => s.teacherId === t.id)
+  );
+  const displayTeachers = [...teachersWithSlots, ...teachersWithoutSlots];
 
   // Получить слот для ячейки
   const getSlotForCell = (teacherId: string, time: string): ScheduleSlot | undefined => {
@@ -268,8 +270,36 @@ export default function SchedulePage() {
   };
 
   const handleDeleteSlot = async (slotId: string) => {
-    if (!confirm("Удалить этот слот?")) return;
-    await fetch(`/api/schedule/${slotId}`, { method: "DELETE" });
+    const slot = slots.find((s) => s.id === slotId);
+    if (!slot) return;
+
+    // Слот создаётся сразу для всех дней группы (Пн/Ср/Пт или Вт/Чт),
+    // поэтому удаляем все парные слоты с тем же teacher+time на этой неделе.
+    const slotsToDelete = slots.filter(
+      (s) =>
+        s.teacherId === slot.teacherId &&
+        s.startTime === slot.startTime &&
+        currentDayGroup.days.includes(s.dayOfWeek)
+    );
+
+    const dayLabel = currentDayGroup.label;
+    const confirmMsg =
+      slotsToDelete.length > 1
+        ? `Удалить занятие во все дни (${dayLabel})? Будет удалено ${slotsToDelete.length} слот(ов).`
+        : "Удалить этот слот?";
+    if (!confirm(confirmMsg)) return;
+
+    const results = await Promise.all(
+      slotsToDelete.map((s) =>
+        fetch(`/api/schedule/${s.id}`, { method: "DELETE" })
+      )
+    );
+
+    const failed = results.filter((r) => !r.ok).length;
+    if (failed > 0) {
+      alert(`Не удалось удалить ${failed} из ${slotsToDelete.length} слотов`);
+    }
+
     fetchSlots();
   };
 
