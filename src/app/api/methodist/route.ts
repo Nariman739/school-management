@@ -12,6 +12,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "date обязателен" }, { status: 400 });
     }
 
+    // Методический час только в рабочие дни (Пн-Пт)
+    const dayOfWeek = new Date(`${date}T00:00:00`).getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      return NextResponse.json([]);
+    }
+
     // Все активные методисты
     const methodists = await prisma.teacher.findMany({
       where: { isMethodist: true, isActive: true },
@@ -52,6 +58,14 @@ export async function POST(request: NextRequest) {
     if (!teacherId || !date || completed === undefined) {
       return NextResponse.json(
         { error: "teacherId, date и completed обязательны" },
+        { status: 400 }
+      );
+    }
+
+    const dayOfWeek = new Date(`${date}T00:00:00`).getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      return NextResponse.json(
+        { error: "Методический час недоступен в выходные дни" },
         { status: 400 }
       );
     }

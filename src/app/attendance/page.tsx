@@ -207,7 +207,9 @@ export default function AttendancePage() {
     setDate(d.toISOString().split("T")[0]);
   };
 
-  const dayName = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"][new Date(date).getDay()];
+  const dayOfWeek = new Date(`${date}T00:00:00`).getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const dayName = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"][dayOfWeek];
 
   const totalStudents = attendanceData.reduce((a, s) => a + s.students.length, 0);
   const attendedStudents = attendanceData.reduce((a, s) => a + s.students.filter((st) => st.status === "ATTENDED" || st.status === "MAKEUP").length, 0);
@@ -260,8 +262,14 @@ export default function AttendancePage() {
         <div className="text-center text-gray-400">Загрузка...</div>
       ) : (
         <>
-          {/* Методический час */}
-          {methodists.length > 0 && (
+          {/* Методический час — только в рабочие дни */}
+          {isWeekend ? (
+            <Card className="mb-4 border-gray-200 bg-gray-50">
+              <CardContent className="py-3 text-sm text-gray-500">
+                Методический час доступен только в рабочие дни (Пн–Пт)
+              </CardContent>
+            </Card>
+          ) : methodists.length > 0 && (
             <Card className="mb-4 border-indigo-200">
               <CardHeader className="pb-3">
                 <CardTitle className="text-base">Методический час</CardTitle>
