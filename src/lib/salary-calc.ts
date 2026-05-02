@@ -107,22 +107,23 @@ export function calculateBehavioralBonus(
 }
 
 // Рассчитать методический бонус за неделю
+// Платим только за дни, явно отмеченные как "состоялся".
+// Без отметок — 0 (никаких автоматических начислений за неделю).
 export function calculateMethodistBonus(
   teacher: { methodistWeeklyRate: number; methodistDailyRate: number },
   checks: { completed: number; total: number } | undefined
 ): number {
   if (teacher.methodistWeeklyRate <= 0) return 0;
 
-  if (checks && checks.total > 0) {
-    const dailyRate =
-      teacher.methodistDailyRate > 0
-        ? teacher.methodistDailyRate
-        : Math.round(teacher.methodistWeeklyRate / 5);
-    return checks.completed * dailyRate;
-  }
+  const completed = checks?.completed ?? 0;
+  if (completed === 0) return 0;
 
-  // Нет отметок — полная неделя
-  return teacher.methodistWeeklyRate;
+  const dailyRate =
+    teacher.methodistDailyRate > 0
+      ? teacher.methodistDailyRate
+      : Math.round(teacher.methodistWeeklyRate / 5);
+
+  return Math.min(completed * dailyRate, teacher.methodistWeeklyRate);
 }
 
 // Вычислить даты для каждого дня недели
