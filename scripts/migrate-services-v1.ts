@@ -89,13 +89,22 @@ async function step4_FillGroupTypes() {
   console.log("[4] fill Group.groupType");
   const groups = await prisma.group.findMany({ include: { members: true } });
   for (const g of groups) {
-    if (g.groupType && g.groupType !== "GROUP" && g.groupType !== "") {
-      const valid = ["INDIVIDUAL", "PAIR", "GROUP"];
-      if (valid.includes(g.groupType)) continue;
+    if (g.groupType === "INDIVIDUAL" || g.groupType === "PAIR" || g.groupType === "GROUP") {
+      // Уже корректно классифицировано (например админом через UI) — не трогаем
+      continue;
     }
-    let next: "INDIVIDUAL" | "PAIR" | "GROUP" = "GROUP";
-    if (g.members.length === 1) next = "INDIVIDUAL";
-    else if (g.members.length === 2) next = "PAIR";
+    const hasName = !!(g.name && g.name.trim().length > 0);
+    let next: "INDIVIDUAL" | "PAIR" | "GROUP";
+    if (hasName) {
+      // Если у группы есть имя — это группа (даже с 2 учениками). Пары идентифицируются составом, не именем.
+      next = "GROUP";
+    } else if (g.members.length === 1) {
+      next = "INDIVIDUAL";
+    } else if (g.members.length === 2) {
+      next = "PAIR";
+    } else {
+      next = "GROUP";
+    }
     if (g.groupType !== next) {
       await prisma.group.update({ where: { id: g.id }, data: { groupType: next } });
     }
