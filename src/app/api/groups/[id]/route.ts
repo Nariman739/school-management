@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { buildGroupDisplayName, validateGroupComposition } from "@/lib/group-utils";
 
 export async function PUT(
   request: NextRequest,
@@ -9,45 +10,52 @@ export async function PUT(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, teacherId, studentIds } = body;
+    const { name, teacherId, studentIds, groupType } = body as {
+      name?: string;
+      teacherId?: string;
+      studentIds?: string[];
+      groupType?: string;
+    };
 
-    if (!name || !teacherId) {
-      return NextResponse.json(
-        { error: "Название группы и учитель обязательны для заполнения" },
-        { status: 400 }
-      );
+    const existing = await prisma.group.findUnique({
+      where: { id },
+      include: { members: true },
+    });
+    if (!existing) {
+      return NextResponse.json({ error: "Группа не найдена" }, { status: 404 });
     }
 
-    const existing = await prisma.group.findUnique({ where: { id } });
-    if (!existing) {
-      return NextResponse.json(
-        { error: "Группа не найдена" },
-        { status: 404 }
-      );
+    const nextType = (groupType ?? existing.groupType ?? "GROUP").toUpperCase();
+    const nextIds = Array.isArray(studentIds)
+      ? studentIds
+      : existing.members.map((m) => m.studentId);
+    const nextName = name !== undefined ? name?.trim() || null : existing.name;
+    const nextTeacherId = teacherId ?? existing.teacherId;
+
+    const compositionError = validateGroupComposition(nextType, nextIds.length, nextName);
+    if (compositionError) {
+      return NextResponse.json({ error: compositionError }, { status: 400 });
     }
 
     const group = await prisma.$transaction(async (tx) => {
-      // Update group name and teacher
       await tx.group.update({
         where: { id },
-        data: { name, teacherId },
+        data: {
+          name: nextName,
+          teacherId: nextTeacherId,
+          groupType: nextType,
+        },
       });
 
-      // Sync members: delete all existing, then create new
       if (studentIds !== undefined) {
         await tx.groupMember.deleteMany({ where: { groupId: id } });
-
-        if (studentIds.length > 0) {
+        if (nextIds.length > 0) {
           await tx.groupMember.createMany({
-            data: studentIds.map((studentId: string) => ({
-              groupId: id,
-              studentId,
-            })),
+            data: nextIds.map((studentId) => ({ groupId: id, studentId })),
           });
         }
       }
 
-      // Return updated group with relations
       return tx.group.findUnique({
         where: { id },
         include: {
@@ -59,7 +67,10 @@ export async function PUT(
 
     await logAudit({ entityType: "Group", entityId: id, action: "UPDATE" });
 
-    return NextResponse.json(group);
+    return NextResponse.json({
+      ...group,
+      displayName: group ? buildGroupDisplayName(group) : null,
+    });
   } catch (error) {
     console.error("Ошибка при обновлении группы:", error);
     return NextResponse.json(

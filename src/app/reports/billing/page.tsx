@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -18,16 +18,28 @@ interface BillingDetail {
   time: string;
   teacherName: string;
   type: string;
+  serviceName: string | null;
+  price: number;
+  status: string;
+}
+
+interface ServiceBreakdown {
+  serviceTypeId: string | null;
+  serviceName: string;
+  hours: number;
+  amount: number;
 }
 
 interface BillingEntry {
   studentId: string;
+  studentNumber: number | null;
   studentName: string;
   parentName: string;
   parentPhone: string;
   hourlyRate: number;
   totalHours: number;
   totalAmount: number;
+  byService: ServiceBreakdown[];
   details: BillingDetail[];
 }
 
@@ -53,7 +65,6 @@ export default function BillingReportPage() {
     <div>
       <h1 className="mb-6 text-2xl font-bold">Счёт родителям</h1>
 
-      {/* Выбор недели */}
       <div className="mb-6 flex items-center gap-4">
         <div className="flex items-center gap-2">
           <Button
@@ -96,39 +107,46 @@ export default function BillingReportPage() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-12">№</TableHead>
               <TableHead>Ученик</TableHead>
               <TableHead>Родитель</TableHead>
               <TableHead>Телефон</TableHead>
               <TableHead className="text-right">Часы</TableHead>
-              <TableHead className="text-right">Ставка</TableHead>
+              <TableHead>Разбивка по услугам</TableHead>
               <TableHead className="text-right">Сумма</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
             {data.map((entry) => (
-              <>
+              <Fragment key={entry.studentId}>
                 <TableRow
-                  key={entry.studentId}
                   className="cursor-pointer hover:bg-gray-50"
                   onClick={() =>
                     setExpandedStudent(
-                      expandedStudent === entry.studentId
-                        ? null
-                        : entry.studentId
+                      expandedStudent === entry.studentId ? null : entry.studentId,
                     )
                   }
                 >
-                  <TableCell className="font-medium">
-                    {entry.studentName}
+                  <TableCell className="text-muted-foreground font-mono">
+                    {entry.studentNumber ?? "—"}
                   </TableCell>
+                  <TableCell className="font-medium">{entry.studentName}</TableCell>
                   <TableCell>{entry.parentName}</TableCell>
                   <TableCell>{entry.parentPhone}</TableCell>
-                  <TableCell className="text-right">
-                    {entry.totalHours}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    {entry.hourlyRate.toLocaleString()} ₸
+                  <TableCell className="text-right">{entry.totalHours}</TableCell>
+                  <TableCell>
+                    <div className="flex flex-wrap gap-1">
+                      {entry.byService.map((b) => (
+                        <span
+                          key={(b.serviceTypeId ?? "legacy") + b.serviceName}
+                          className="rounded bg-gray-100 px-2 py-0.5 text-xs"
+                          title={`${b.hours} ч × ${(b.amount / Math.max(b.hours, 1)).toLocaleString()} ₸`}
+                        >
+                          {b.serviceName}: <strong>{b.hours} ч</strong> ({b.amount.toLocaleString()} ₸)
+                        </span>
+                      ))}
+                    </div>
                   </TableCell>
                   <TableCell className="text-right font-bold">
                     {entry.totalAmount.toLocaleString()} ₸
@@ -138,8 +156,8 @@ export default function BillingReportPage() {
                   </TableCell>
                 </TableRow>
                 {expandedStudent === entry.studentId && (
-                  <TableRow key={`${entry.studentId}-details`}>
-                    <TableCell colSpan={7}>
+                  <TableRow>
+                    <TableCell colSpan={8}>
                       <Card className="m-2">
                         <CardHeader className="pb-2">
                           <CardTitle className="text-sm">
@@ -153,31 +171,34 @@ export default function BillingReportPage() {
                                 <TableHead>День</TableHead>
                                 <TableHead>Время</TableHead>
                                 <TableHead>Учитель</TableHead>
-                                <TableHead>Тип</TableHead>
+                                <TableHead>Услуга</TableHead>
+                                <TableHead className="text-right">Цена</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
                               {entry.details
                                 .sort(
                                   (a, b) =>
-                                    a.day - b.day ||
-                                    a.time.localeCompare(b.time)
+                                    a.day - b.day || a.time.localeCompare(b.time),
                                 )
                                 .map((d, i) => (
                                   <TableRow key={i}>
                                     <TableCell>
                                       {
-                                        DAYS_OF_WEEK.find(
-                                          (dw) => dw.value === d.day
-                                        )?.full
+                                        DAYS_OF_WEEK.find((dw) => dw.value === d.day)
+                                          ?.full
                                       }
                                     </TableCell>
                                     <TableCell>{d.time}</TableCell>
                                     <TableCell>{d.teacherName}</TableCell>
                                     <TableCell>
-                                      {d.type === "INDIVIDUAL"
-                                        ? "Индивидуальное"
-                                        : "Групповое"}
+                                      {d.serviceName ??
+                                        (d.type === "INDIVIDUAL"
+                                          ? "Индивидуальное"
+                                          : "Групповое")}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      {d.price.toLocaleString()} ₸
                                     </TableCell>
                                   </TableRow>
                                 ))}
@@ -188,7 +209,7 @@ export default function BillingReportPage() {
                     </TableCell>
                   </TableRow>
                 )}
-              </>
+              </Fragment>
             ))}
           </TableBody>
         </Table>

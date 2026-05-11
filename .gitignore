@@ -47,3 +47,6 @@ next-env.d.ts
 
 # client data
 /data/
+
+# DB snapshots (содержат персональные данные)
+backups/

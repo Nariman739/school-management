@@ -1,14 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -32,9 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { PlusIcon, PencilIcon, Trash2Icon, UsersIcon, XIcon, UserPlusIcon } from "lucide-react";
-
-// ─── Types ──────────────────────────────────────────────────────────
+import { PlusIcon, PencilIcon, Trash2Icon, UsersIcon, XIcon } from "lucide-react";
 
 interface Teacher {
   id: string;
@@ -59,13 +54,15 @@ interface GroupMember {
 
 interface Group {
   id: string;
-  name: string;
+  name: string | null;
+  displayName?: string | null;
+  groupType: "INDIVIDUAL" | "PAIR" | "GROUP";
   teacherId: string;
   teacher: Teacher;
   members: GroupMember[];
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────
+type GroupTabType = "GROUP" | "PAIR";
 
 function formatTeacherName(teacher: Teacher) {
   const parts = [teacher.lastName, teacher.firstName];
@@ -74,75 +71,47 @@ function formatTeacherName(teacher: Teacher) {
 }
 
 function formatStudentName(student: Student) {
-  const parts = [student.lastName, student.firstName];
-  if (student.patronymic) parts.push(student.patronymic);
-  return parts.join(" ");
+  return `${student.lastName} ${student.firstName}`.trim();
 }
 
-// ─── Page Component ─────────────────────────────────────────────────
+function pairDisplayName(members: GroupMember[]): string {
+  if (members.length !== 2) return "—";
+  return members.map((m) => formatStudentName(m.student)).join(" + ");
+}
 
 export default function GroupsPage() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<GroupTabType>("GROUP");
 
-  // Dialog states
   const [formDialogOpen, setFormDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [membersDialogOpen, setMembersDialogOpen] = useState(false);
-
-  // Currently selected / editing
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null);
-  const [viewingGroup, setViewingGroup] = useState<Group | null>(null);
 
-  // Form fields
+  const [formGroupType, setFormGroupType] = useState<GroupTabType>("GROUP");
   const [formName, setFormName] = useState("");
   const [formTeacherId, setFormTeacherId] = useState("");
   const [formStudentIds, setFormStudentIds] = useState<string[]>([]);
-
-  // Members dialog: add student
-  const [addStudentId, setAddStudentId] = useState("");
+  const [formError, setFormError] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
 
-  // ─── Data fetching ────────────────────────────────────────────────
-
   const fetchGroups = useCallback(async () => {
-    try {
-      const res = await fetch("/api/groups");
-      if (res.ok) {
-        const data = await res.json();
-        setGroups(data);
-      }
-    } catch (error) {
-      console.error("Ошибка загрузки групп:", error);
-    }
+    const res = await fetch("/api/groups");
+    if (res.ok) setGroups(await res.json());
   }, []);
 
   const fetchTeachers = useCallback(async () => {
-    try {
-      const res = await fetch("/api/teachers");
-      if (res.ok) {
-        const data = await res.json();
-        setTeachers(data);
-      }
-    } catch (error) {
-      console.error("Ошибка загрузки учителей:", error);
-    }
+    const res = await fetch("/api/teachers");
+    if (res.ok) setTeachers(await res.json());
   }, []);
 
   const fetchStudents = useCallback(async () => {
-    try {
-      const res = await fetch("/api/students");
-      if (res.ok) {
-        const data = await res.json();
-        setStudents(data);
-      }
-    } catch (error) {
-      console.error("Ошибка загрузки учеников:", error);
-    }
+    const res = await fetch("/api/students");
+    if (res.ok) setStudents(await res.json());
   }, []);
 
   useEffect(() => {
@@ -154,62 +123,80 @@ export default function GroupsPage() {
     loadAll();
   }, [fetchGroups, fetchTeachers, fetchStudents]);
 
-  // ─── Form dialog handlers ────────────────────────────────────────
+  const filteredGroups = useMemo(
+    () => groups.filter((g) => (g.groupType ?? "GROUP") === activeTab),
+    [groups, activeTab],
+  );
 
   function openCreateDialog() {
     setEditingGroup(null);
+    setFormGroupType(activeTab);
     setFormName("");
     setFormTeacherId("");
     setFormStudentIds([]);
+    setFormError(null);
     setFormDialogOpen(true);
   }
 
   function openEditDialog(group: Group) {
     setEditingGroup(group);
-    setFormName(group.name);
+    setFormGroupType((group.groupType as GroupTabType) ?? "GROUP");
+    setFormName(group.name ?? "");
     setFormTeacherId(group.teacherId);
     setFormStudentIds(group.members.map((m) => m.studentId));
+    setFormError(null);
     setFormDialogOpen(true);
   }
 
+  function validateBeforeSubmit(): string | null {
+    if (!formTeacherId) return "Выберите учителя";
+    if (formGroupType === "PAIR" && formStudentIds.length !== 2) {
+      return "В паре должно быть ровно 2 ученика";
+    }
+    if (formGroupType === "GROUP") {
+      if (!formName.trim()) return "Для группы укажите название";
+      if (formStudentIds.length < 2) return "В группе должно быть минимум 2 ученика";
+    }
+    return null;
+  }
+
   async function handleFormSubmit() {
-    if (!formName.trim() || !formTeacherId) return;
+    const v = validateBeforeSubmit();
+    if (v) {
+      setFormError(v);
+      return;
+    }
 
     setSaving(true);
+    setFormError(null);
     try {
       const payload = {
-        name: formName.trim(),
+        name: formGroupType === "PAIR" ? null : formName.trim(),
+        groupType: formGroupType,
         teacherId: formTeacherId,
         studentIds: formStudentIds,
       };
 
-      let res: Response;
-      if (editingGroup) {
-        res = await fetch(`/api/groups/${editingGroup.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-      } else {
-        res = await fetch("/api/groups", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+      const url = editingGroup ? `/api/groups/${editingGroup.id}` : "/api/groups";
+      const method = editingGroup ? "PUT" : "POST";
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFormError(data?.error || "Не удалось сохранить");
+        return;
       }
 
-      if (res.ok) {
-        await fetchGroups();
-        setFormDialogOpen(false);
-      }
-    } catch (error) {
-      console.error("Ошибка сохранения группы:", error);
+      await fetchGroups();
+      setFormDialogOpen(false);
     } finally {
       setSaving(false);
     }
   }
-
-  // ─── Delete handlers ──────────────────────────────────────────────
 
   function openDeleteDialog(group: Group) {
     setDeletingGroup(group);
@@ -218,117 +205,33 @@ export default function GroupsPage() {
 
   async function handleDelete() {
     if (!deletingGroup) return;
-
     setSaving(true);
     try {
-      const res = await fetch(`/api/groups/${deletingGroup.id}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(`/api/groups/${deletingGroup.id}`, { method: "DELETE" });
       if (res.ok) {
         await fetchGroups();
         setDeleteDialogOpen(false);
         setDeletingGroup(null);
       }
-    } catch (error) {
-      console.error("Ошибка удаления группы:", error);
     } finally {
       setSaving(false);
     }
   }
-
-  // ─── Members dialog handlers ──────────────────────────────────────
-
-  function openMembersDialog(group: Group) {
-    setViewingGroup(group);
-    setAddStudentId("");
-    setMembersDialogOpen(true);
-  }
-
-  async function handleAddMember() {
-    if (!viewingGroup || !addStudentId) return;
-
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/groups/${viewingGroup.id}/members`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentId: addStudentId }),
-      });
-
-      if (res.ok) {
-        await fetchGroups();
-        // Update the viewing group with fresh data
-        const updatedGroups = await fetch("/api/groups").then((r) => r.json());
-        const updated = updatedGroups.find(
-          (g: Group) => g.id === viewingGroup.id
-        );
-        if (updated) setViewingGroup(updated);
-        setAddStudentId("");
-      }
-    } catch (error) {
-      console.error("Ошибка добавления ученика:", error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleRemoveMember(studentId: string) {
-    if (!viewingGroup) return;
-
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/groups/${viewingGroup.id}/members`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentId }),
-      });
-
-      if (res.ok) {
-        await fetchGroups();
-        // Update the viewing group with fresh data
-        const updatedGroups = await fetch("/api/groups").then((r) => r.json());
-        const updated = updatedGroups.find(
-          (g: Group) => g.id === viewingGroup.id
-        );
-        if (updated) setViewingGroup(updated);
-      }
-    } catch (error) {
-      console.error("Ошибка удаления ученика:", error);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Students not already in the viewing group (for the add-member dropdown)
-  const availableStudentsForMembers = viewingGroup
-    ? students.filter(
-        (s) =>
-          s.isActive &&
-          !viewingGroup.members.some((m) => m.studentId === s.id)
-      )
-    : [];
-
-  // ─── Multi-select students for form ───────────────────────────────
 
   function toggleStudentInForm(studentId: string) {
-    setFormStudentIds((prev) =>
-      prev.includes(studentId)
-        ? prev.filter((id) => id !== studentId)
-        : [...prev, studentId]
-    );
+    setFormStudentIds((prev) => {
+      if (prev.includes(studentId)) return prev.filter((id) => id !== studentId);
+      if (formGroupType === "PAIR" && prev.length >= 2) {
+        return [prev[1], studentId];
+      }
+      return [...prev, studentId];
+    });
   }
 
-  // Active students not yet selected in form
   const availableStudentsForForm = students.filter(
-    (s) => s.isActive && !formStudentIds.includes(s.id)
+    (s) => s.isActive && !formStudentIds.includes(s.id),
   );
-
-  // Students currently selected in form
-  const selectedStudentsForForm = students.filter((s) =>
-    formStudentIds.includes(s.id)
-  );
-
-  // ─── Render ───────────────────────────────────────────────────────
+  const selectedStudentsForForm = students.filter((s) => formStudentIds.includes(s.id));
 
   if (loading) {
     return (
@@ -338,30 +241,60 @@ export default function GroupsPage() {
     );
   }
 
+  const groupsCount = groups.filter((g) => (g.groupType ?? "GROUP") === "GROUP").length;
+  const pairsCount = groups.filter((g) => g.groupType === "PAIR").length;
+
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Группы</h1>
+          <h1 className="text-2xl font-bold">Группы и пары</h1>
           <p className="text-muted-foreground">
-            Управление учебными группами
+            {activeTab === "GROUP"
+              ? "Учебные группы с названиями (например, грМНО)"
+              : "Пары — два ученика занимаются вдвоём, имя необязательно"}
           </p>
         </div>
         <Button onClick={openCreateDialog}>
           <PlusIcon />
-          Создать группу
+          {activeTab === "GROUP" ? "Создать группу" : "Создать пару"}
         </Button>
       </div>
 
-      {/* Groups Table */}
-      {groups.length === 0 ? (
+      <div className="flex gap-2 border-b">
+        <button
+          onClick={() => setActiveTab("GROUP")}
+          className={`relative px-4 py-2 text-sm font-medium ${
+            activeTab === "GROUP"
+              ? "border-b-2 border-primary text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Группы <Badge variant="secondary" className="ml-1">{groupsCount}</Badge>
+        </button>
+        <button
+          onClick={() => setActiveTab("PAIR")}
+          className={`relative px-4 py-2 text-sm font-medium ${
+            activeTab === "PAIR"
+              ? "border-b-2 border-primary text-primary"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Пары <Badge variant="secondary" className="ml-1">{pairsCount}</Badge>
+        </button>
+      </div>
+
+      {filteredGroups.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
             <UsersIcon className="size-12 text-muted-foreground mb-4" />
-            <p className="text-muted-foreground text-lg">Нет групп</p>
+            <p className="text-muted-foreground text-lg">
+              {activeTab === "GROUP" ? "Нет групп" : "Нет пар"}
+            </p>
             <p className="text-muted-foreground text-sm">
-              Создайте первую группу, нажав кнопку выше
+              {activeTab === "GROUP"
+                ? "Создайте первую группу, нажав кнопку выше"
+                : "Создайте первую пару — двух учеников, занимающихся вдвоём"}
             </p>
           </CardContent>
         </Card>
@@ -371,41 +304,28 @@ export default function GroupsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Название</TableHead>
+                  <TableHead>
+                    {activeTab === "GROUP" ? "Название" : "Состав"}
+                  </TableHead>
                   <TableHead>Учитель</TableHead>
-                  <TableHead>Кол-во учеников</TableHead>
+                  <TableHead>Учеников</TableHead>
                   <TableHead className="text-right">Действия</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {groups.map((group) => (
+                {filteredGroups.map((group) => (
                   <TableRow key={group.id}>
-                    <TableCell>
-                      <button
-                        onClick={() => openMembersDialog(group)}
-                        className="font-medium text-primary hover:underline cursor-pointer"
-                      >
-                        {group.name}
-                      </button>
+                    <TableCell className="font-medium">
+                      {group.groupType === "PAIR"
+                        ? pairDisplayName(group.members)
+                        : group.name ?? group.displayName ?? "—"}
                     </TableCell>
+                    <TableCell>{formatTeacherName(group.teacher)}</TableCell>
                     <TableCell>
-                      {formatTeacherName(group.teacher)}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">
-                        {group.members.length}
-                      </Badge>
+                      <Badge variant="secondary">{group.members.length}</Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => openMembersDialog(group)}
-                          title="Участники"
-                        >
-                          <UsersIcon />
-                        </Button>
                         <Button
                           variant="ghost"
                           size="icon-sm"
@@ -432,33 +352,56 @@ export default function GroupsPage() {
         </Card>
       )}
 
-      {/* ─── Create / Edit Dialog ───────────────────────────────────── */}
       <Dialog open={formDialogOpen} onOpenChange={setFormDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {editingGroup ? "Редактировать группу" : "Создать группу"}
+              {editingGroup
+                ? formGroupType === "PAIR"
+                  ? "Редактировать пару"
+                  : "Редактировать группу"
+                : formGroupType === "PAIR"
+                ? "Создать пару"
+                : "Создать группу"}
             </DialogTitle>
             <DialogDescription>
-              {editingGroup
-                ? "Измените данные группы и нажмите Сохранить."
-                : "Заполните данные новой группы."}
+              {formGroupType === "PAIR"
+                ? "Пара — это два ученика. Имя не требуется, оно сгенерируется автоматически."
+                : "Группа имеет название и 2+ учеников."}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            {/* Name */}
-            <div className="grid gap-2">
-              <Label htmlFor="group-name">Название группы</Label>
-              <Input
-                id="group-name"
-                value={formName}
-                onChange={(e) => setFormName(e.target.value)}
-                placeholder="Например: Английский А1"
-              />
-            </div>
+            {!editingGroup && (
+              <div className="grid gap-2">
+                <Label>Тип</Label>
+                <Select
+                  value={formGroupType}
+                  onValueChange={(v) => setFormGroupType(v as GroupTabType)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GROUP">Группа (с именем, 2+ учеников)</SelectItem>
+                    <SelectItem value="PAIR">Пара (без имени, 2 ученика)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
-            {/* Teacher select */}
+            {formGroupType === "GROUP" && (
+              <div className="grid gap-2">
+                <Label htmlFor="group-name">Название группы</Label>
+                <Input
+                  id="group-name"
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="Например: грМНО"
+                />
+              </div>
+            )}
+
             <div className="grid gap-2">
               <Label>Учитель</Label>
               <Select value={formTeacherId} onValueChange={setFormTeacherId}>
@@ -475,11 +418,11 @@ export default function GroupsPage() {
               </Select>
             </div>
 
-            {/* Students multi-select */}
             <div className="grid gap-2">
-              <Label>Ученики</Label>
+              <Label>
+                Ученики {formGroupType === "PAIR" && <span className="text-xs text-muted-foreground">(ровно 2)</span>}
+              </Label>
 
-              {/* Selected students as badges */}
               {selectedStudentsForForm.length > 0 && (
                 <div className="flex flex-wrap gap-1.5">
                   {selectedStudentsForForm.map((student) => (
@@ -497,177 +440,71 @@ export default function GroupsPage() {
                 </div>
               )}
 
-              {/* Dropdown to add more students */}
-              {availableStudentsForForm.length > 0 && (
-                <Select
-                  value=""
-                  onValueChange={(value) => {
-                    if (value) toggleStudentInForm(value);
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Добавить ученика..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableStudentsForForm.map((student) => (
-                      <SelectItem key={student.id} value={student.id}>
-                        {formatStudentName(student)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {formGroupType === "PAIR" && selectedStudentsForForm.length === 2 && (
+                <div className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  Имя пары: <strong>{pairDisplayName(selectedStudentsForForm.map((s) => ({ id: s.id, studentId: s.id, student: s })))}</strong>
+                </div>
               )}
 
-              {availableStudentsForForm.length === 0 &&
-                selectedStudentsForForm.length === 0 && (
-                  <p className="text-sm text-muted-foreground">
-                    Нет доступных учеников
-                  </p>
-                )}
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setFormDialogOpen(false)}
-              disabled={saving}
-            >
-              Отмена
-            </Button>
-            <Button
-              onClick={handleFormSubmit}
-              disabled={saving || !formName.trim() || !formTeacherId}
-            >
-              {saving ? "Сохранение..." : "Сохранить"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ─── Delete Confirmation Dialog ──────────────────────────────── */}
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Удалить группу</DialogTitle>
-            <DialogDescription>
-              Вы уверены, что хотите удалить группу{" "}
-              <strong>{deletingGroup?.name}</strong>? Это действие нельзя
-              отменить. Все связанные данные будут удалены.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteDialogOpen(false)}
-              disabled={saving}
-            >
-              Отмена
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              disabled={saving}
-            >
-              {saving ? "Удаление..." : "Удалить"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ─── Members Dialog ──────────────────────────────────────────── */}
-      <Dialog open={membersDialogOpen} onOpenChange={setMembersDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>
-              Участники группы: {viewingGroup?.name}
-            </DialogTitle>
-            <DialogDescription>
-              Учитель: {viewingGroup?.teacher && formatTeacherName(viewingGroup.teacher)}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            {/* Add member */}
-            {availableStudentsForMembers.length > 0 && (
-              <div className="flex items-end gap-2">
-                <div className="flex-1">
-                  <Label>Добавить ученика</Label>
+              {availableStudentsForForm.length > 0 &&
+                (formGroupType !== "PAIR" || selectedStudentsForForm.length < 2) && (
                   <Select
-                    value={addStudentId}
-                    onValueChange={setAddStudentId}
+                    value=""
+                    onValueChange={(value) => {
+                      if (value) toggleStudentInForm(value);
+                    }}
                   >
-                    <SelectTrigger className="w-full mt-1.5">
-                      <SelectValue placeholder="Выберите ученика..." />
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Добавить ученика..." />
                     </SelectTrigger>
                     <SelectContent>
-                      {availableStudentsForMembers.map((student) => (
+                      {availableStudentsForForm.map((student) => (
                         <SelectItem key={student.id} value={student.id}>
                           {formatStudentName(student)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-                <Button
-                  onClick={handleAddMember}
-                  disabled={saving || !addStudentId}
-                  size="default"
-                >
-                  <UserPlusIcon />
-                  Добавить
-                </Button>
-              </div>
-            )}
+                )}
+            </div>
 
-            {/* Members list */}
-            {viewingGroup && viewingGroup.members.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Ученик</TableHead>
-                    <TableHead className="text-right w-[80px]" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {viewingGroup.members.map((member) => (
-                    <TableRow key={member.id}>
-                      <TableCell>
-                        {formatStudentName(member.student)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() =>
-                            handleRemoveMember(member.studentId)
-                          }
-                          disabled={saving}
-                          title="Удалить из группы"
-                        >
-                          <Trash2Icon className="text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            ) : (
-              <div className="flex flex-col items-center py-6">
-                <UsersIcon className="size-8 text-muted-foreground mb-2" />
-                <p className="text-sm text-muted-foreground">
-                  В группе пока нет учеников
-                </p>
+            {formError && (
+              <div className="rounded bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {formError}
               </div>
             )}
           </div>
 
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setMembersDialogOpen(false)}
-            >
-              Закрыть
+            <Button variant="outline" onClick={() => setFormDialogOpen(false)} disabled={saving}>
+              Отмена
+            </Button>
+            <Button onClick={handleFormSubmit} disabled={saving}>
+              {saving ? "Сохранение..." : "Сохранить"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Удалить {deletingGroup?.groupType === "PAIR" ? "пару" : "группу"}
+            </DialogTitle>
+            <DialogDescription>
+              {deletingGroup?.groupType === "PAIR"
+                ? `Удалить пару ${pairDisplayName(deletingGroup?.members ?? [])}?`
+                : `Удалить группу «${deletingGroup?.name}»?`}{" "}
+              Действие нельзя отменить.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={saving}>
+              Отмена
+            </Button>
+            <Button variant="destructive" onClick={handleDelete} disabled={saving}>
+              {saving ? "Удаление..." : "Удалить"}
             </Button>
           </DialogFooter>
         </DialogContent>

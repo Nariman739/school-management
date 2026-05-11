@@ -1,21 +1,53 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getEndTime, DAY_GROUPS } from "@/lib/schedule-utils";
+import { freezePriceForSlot, getDefaultServiceTypeForSlot } from "@/lib/pricing";
 
 interface SlotToCreate {
   teacherId: string;
   studentId?: string | null;
   groupId?: string | null;
+  pairStudentIds?: string[]; // когда импорт распознал пару из ячейки "X+Y"
   startTime: string;
   dayGroup: "mwf" | "tt";
-  lessonType: string;
+  lessonType: string; // "INDIVIDUAL" | "PAIR" | "GROUP"
   lessonCategory?: string | null;
   room?: string | null;
+  serviceTypeId?: string | null;
 }
 
-// POST /api/schedule/import/confirm
-// Body: { slots: SlotToCreate[], weekStart: string }
-// Принимает уже разрешённые слоты (после ручного сопоставления в UI) и создаёт их в БД
+// Ищет существующую PAIR-группу с ровно этими 2 members + этим учителем, либо создаёт новую
+async function getOrCreatePairGroup(
+  teacherId: string,
+  studentIds: string[],
+): Promise<string | null> {
+  if (studentIds.length !== 2) return null;
+  const [a, b] = studentIds;
+
+  const candidates = await prisma.group.findMany({
+    where: { teacherId, groupType: "PAIR" },
+    include: { members: true },
+  });
+
+  for (const g of candidates) {
+    const ids = g.members.map((m) => m.studentId).sort();
+    const want = [a, b].sort();
+    if (ids.length === 2 && ids[0] === want[0] && ids[1] === want[1]) {
+      return g.id;
+    }
+  }
+
+  const created = await prisma.group.create({
+    data: {
+      teacherId,
+      groupType: "PAIR",
+      name: null,
+      members: { createMany: { data: studentIds.map((studentId) => ({ studentId })) } },
+    },
+  });
+  return created.id;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { slots, weekStart } = await request.json();
@@ -36,8 +68,31 @@ export async function POST(request: NextRequest) {
       const dg = DAY_GROUPS.find((g) => g.id === slot.dayGroup);
       const days = dg?.days ?? [];
 
+      // Разрешаем groupId: либо явный, либо собираем пару из pairStudentIds
+      let resolvedGroupId: string | null = slot.groupId ?? null;
+      let lessonType = slot.lessonType ?? "INDIVIDUAL";
+
+      if (!resolvedGroupId && slot.pairStudentIds && slot.pairStudentIds.length === 2) {
+        resolvedGroupId = await getOrCreatePairGroup(slot.teacherId, slot.pairStudentIds);
+        lessonType = "GROUP"; // в БД пара хранится как Group(groupType=PAIR), lessonType все равно GROUP
+      }
+
+      // Резолвим serviceTypeId
+      let serviceTypeId: string | null = slot.serviceTypeId ?? null;
+      if (!serviceTypeId) {
+        let groupType: string | null = null;
+        if (resolvedGroupId) {
+          const g = await prisma.group.findUnique({
+            where: { id: resolvedGroupId },
+            select: { groupType: true },
+          });
+          groupType = g?.groupType ?? null;
+        }
+        const def = await getDefaultServiceTypeForSlot({ lessonType, groupType });
+        serviceTypeId = def?.id ?? null;
+      }
+
       for (const dayOfWeek of days) {
-        // Конфликт учителя
         const teacherConflict = await prisma.scheduleSlot.findFirst({
           where: {
             weekStartDate: weekStart,
@@ -52,7 +107,6 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        // Конфликт ученика
         if (slot.studentId) {
           const studentConflict = await prisma.scheduleSlot.findFirst({
             where: {
@@ -69,16 +123,24 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        const frozenPrice = await freezePriceForSlot({
+          studentId: slot.studentId ?? null,
+          groupId: resolvedGroupId,
+          serviceTypeId,
+        });
+
         await prisma.scheduleSlot.create({
           data: {
             teacherId: slot.teacherId,
             studentId: slot.studentId ?? null,
-            groupId: slot.groupId ?? null,
+            groupId: resolvedGroupId,
+            serviceTypeId,
+            frozenPrice,
             dayOfWeek,
             startTime: slot.startTime,
             endTime: getEndTime(slot.startTime),
             weekStartDate: weekStart,
-            lessonType: slot.lessonType ?? "INDIVIDUAL",
+            lessonType,
             lessonCategory: slot.lessonCategory ?? null,
             room: slot.room ?? null,
           },

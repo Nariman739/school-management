@@ -26,9 +26,10 @@ export interface MatchedRow {
   teacherLabel?: string;
   studentId?: string;
   groupId?: string;
+  pairStudentIds?: string[]; // для типа PAIR: id двух учеников
   studentOrGroupLabel?: string;
   startTime?: string;
-  lessonType?: "INDIVIDUAL" | "GROUP";
+  lessonType?: "INDIVIDUAL" | "PAIR" | "GROUP";
   lessonCategory?: string;
   errors: string[];
 }
@@ -55,7 +56,7 @@ interface StudentRecord {
 
 interface GroupRecord {
   id: string;
-  name: string;
+  name: string | null;
   teacherId: string;
 }
 
@@ -306,13 +307,12 @@ export function matchStudentOrGroup(
   const groupMatch = normalized.match(/^(?:группа\s+|гр\.?\s*)(.*)/);
   if (groupMatch) {
     const groupName = groupMatch[1].trim();
-    const found = groups.find(
-      (g) =>
-        g.name.toLowerCase() === groupName ||
-        g.name.toLowerCase().includes(groupName)
-    );
+    const found = groups.find((g) => {
+      const n = (g.name ?? "").toLowerCase();
+      return n && (n === groupName || n.includes(groupName));
+    });
     return found
-      ? { type: "group", id: found.id, label: found.name }
+      ? { type: "group", id: found.id, label: found.name ?? "" }
       : null;
   }
 
@@ -866,36 +866,34 @@ function matchGroupFuzzy(
   // Нормализация: убираем пробелы, lowercase
   const norm = name.toLowerCase().replace(/\s+/g, "");
 
+  // Пары без названия (groupType=PAIR) исключаем — их матчим не по имени
+  const named = groups.filter((g) => !!g.name && g.name.trim().length > 0);
+  const norm2 = (g: GroupRecord) => (g.name ?? "").toLowerCase().replace(/\s+/g, "");
+
   // Точное совпадение (нормализованное)
-  const exact = groups.find(
-    (g) => g.name.toLowerCase().replace(/\s+/g, "") === norm
-  );
+  const exact = named.find((g) => norm2(g) === norm);
   if (exact) return exact;
 
   // Попробовать с префиксом "гр" (в БД может быть "грМ0", а мы ищем "М0")
-  const withPrefix = groups.find(
-    (g) => g.name.toLowerCase().replace(/\s+/g, "") === "гр" + norm
-  );
+  const withPrefix = named.find((g) => norm2(g) === "гр" + norm);
   if (withPrefix) return withPrefix;
 
   // Обратное: в БД "М0", а мы ищем "грМ0" → убираем "гр" из нашего запроса
   const withoutPrefix = norm.startsWith("гр")
-    ? groups.find(
-        (g) => g.name.toLowerCase().replace(/\s+/g, "") === norm.slice(2)
-      )
+    ? named.find((g) => norm2(g) === norm.slice(2))
     : null;
   if (withoutPrefix) return withoutPrefix;
 
   // Содержит / содержится
-  const contains = groups.filter((g) => {
-    const gNorm = g.name.toLowerCase().replace(/\s+/g, "");
+  const contains = named.filter((g) => {
+    const gNorm = norm2(g);
     return gNorm.includes(norm) || norm.includes(gNorm);
   });
   if (contains.length === 1) return contains[0];
 
   // Попробовать с/без "гр" в contains
-  const containsWithGr = groups.filter((g) => {
-    const gNorm = g.name.toLowerCase().replace(/\s+/g, "");
+  const containsWithGr = named.filter((g) => {
+    const gNorm = norm2(g);
     return gNorm.includes("гр" + norm) || ("гр" + norm).includes(gNorm);
   });
   if (containsWithGr.length === 1) return containsWithGr[0];
@@ -1009,7 +1007,7 @@ function matchSingleCellV2(
     if (group) {
       groupId = group.id;
       lessonType = "GROUP";
-      studentOrGroupLabel = `гр ${group.name}`;
+      studentOrGroupLabel = `гр ${group.name ?? ""}`;
     } else {
       errors.push(`Группа не найдена: "${parsed.groupName}"`);
     }
@@ -1098,8 +1096,41 @@ export function matchGridV2(
 
     if (parsed.type === "skip") continue;
 
-    // Для "два ученика" — создаём отдельную запись для каждого
-    if (parsed.type === "multi_student") {
+    if (parsed.type === "multi_student" && parsed.names.length === 2) {
+      // Пара: один MatchedRow с lessonType=PAIR + id обоих учеников
+      const matched = matchSingleCellV2(
+        cell,
+        { ...parsed, type: "student", names: [parsed.names[0]] },
+        teachers,
+        students,
+        groups,
+      );
+      const second = matchSingleCellV2(
+        cell,
+        { ...parsed, type: "student", names: [parsed.names[1]] },
+        teachers,
+        students,
+        groups,
+      );
+
+      const ids: string[] = [];
+      if (matched.studentId) ids.push(matched.studentId);
+      if (second.studentId) ids.push(second.studentId);
+
+      const combinedErrors = [...matched.errors, ...second.errors.filter((e) => !matched.errors.includes(e))];
+      const label = `пара: ${matched.studentOrGroupLabel ?? parsed.names[0]} + ${second.studentOrGroupLabel ?? parsed.names[1]}`;
+
+      matches.push({
+        ...matched,
+        studentId: undefined,
+        groupId: undefined,
+        pairStudentIds: ids,
+        studentOrGroupLabel: label,
+        lessonType: "PAIR",
+        errors: combinedErrors,
+      });
+    } else if (parsed.type === "multi_student") {
+      // 3+ учеников — пока обрабатываем как индивидуальные записи (legacy поведение)
       for (const studentName of parsed.names) {
         const row = matchSingleCellV2(
           cell,

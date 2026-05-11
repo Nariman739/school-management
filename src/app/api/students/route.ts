@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const students = await prisma.student.findMany({
       where: { isActive: true },
-      orderBy: { lastName: "asc" },
+      orderBy: [{ studentNumber: "asc" }, { lastName: "asc" }],
     });
     return NextResponse.json(students);
   } catch (error) {
@@ -19,12 +19,44 @@ export async function GET() {
   }
 }
 
+async function nextStudentNumber(): Promise<number> {
+  // Пытаемся через sequence (создан миграционным скриптом). Если sequence нет — fallback на MAX+1
+  try {
+    const rows = await prisma.$queryRawUnsafe<{ nextval: bigint }[]>(
+      `SELECT nextval('student_number_seq') AS nextval;`,
+    );
+    const v = rows?.[0]?.nextval;
+    if (typeof v === "bigint") return Number(v);
+    if (typeof v === "number") return v;
+  } catch {
+    // sequence ещё не создан — fallback
+  }
+  const agg = await prisma.student.aggregate({ _max: { studentNumber: true } });
+  return (agg._max.studentNumber ?? 0) + 1;
+}
+
 // POST /api/students — create a new student
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const { lastName, firstName, patronymic, parentName, parentPhone, hourlyRate } = body;
+    const {
+      lastName,
+      firstName,
+      patronymic,
+      parentName,
+      parentPhone,
+      hourlyRate,
+      prices,
+    }: {
+      lastName?: string;
+      firstName?: string;
+      patronymic?: string;
+      parentName?: string;
+      parentPhone?: string;
+      hourlyRate?: string | number;
+      prices?: { serviceTypeId: string; price: number | string }[];
+    } = body;
 
     if (!lastName || !firstName) {
       return NextResponse.json(
@@ -33,8 +65,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const studentNumber = await nextStudentNumber();
+
     const student = await prisma.student.create({
       data: {
+        studentNumber,
         lastName,
         firstName,
         patronymic: patronymic || null,
@@ -43,6 +78,17 @@ export async function POST(request: NextRequest) {
         hourlyRate: hourlyRate ? parseInt(String(hourlyRate), 10) : 0,
       },
     });
+
+    if (Array.isArray(prices) && prices.length) {
+      for (const p of prices) {
+        if (!p?.serviceTypeId) continue;
+        const price = Number.parseInt(String(p.price ?? 0), 10) || 0;
+        if (price <= 0) continue;
+        await prisma.studentServicePrice.create({
+          data: { studentId: student.id, serviceTypeId: p.serviceTypeId, price },
+        });
+      }
+    }
 
     await logAudit({ entityType: "Student", entityId: student.id, action: "CREATE" });
 

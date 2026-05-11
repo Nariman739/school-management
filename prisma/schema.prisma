@@ -84,12 +84,13 @@ model Teacher {
 
 model Student {
   id            String   @id @default(uuid())
+  studentNumber Int?     @unique // порядковый № ученика (заполняется через sequence)
   lastName      String
   firstName     String
   patronymic    String?
   parentName    String?
   parentPhone   String?
-  hourlyRate    Int      @default(0)
+  hourlyRate    Int      @default(0) // @deprecated — fallback для legacy слотов; новая логика через StudentServicePrice
   isBehavioral  Boolean  @default(false)
   scheduleType  String?
   branchId      String?  // филиал
@@ -114,6 +115,7 @@ model Student {
   recalculations  Recalculation[]
   tariffHistory      TariffHistory[]
   parentInteractions ParentInteraction[]
+  servicePrices      StudentServicePrice[]
   branch             Branch?  @relation(fields: [branchId], references: [id], onDelete: SetNull)
 }
 
@@ -149,6 +151,8 @@ model TariffHistory {
   hourlyRate        Int
   tariffType        String
   subscriptionRate  Int?
+  serviceTypeId     String?  // для записей по конкретному типу услуги
+  servicePrice      Int?     // цена этого сервиса в момент изменения
   effectiveFrom     String   // "2025-03-01"
   effectiveTo       String?  // null = текущий
   createdAt         DateTime @default(now())
@@ -156,10 +160,43 @@ model TariffHistory {
   student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
 }
 
+// Справочник типов услуг (настраиваемый админом)
+// kind определяет, сколько учеников может быть в слоте
+model ServiceType {
+  id        String   @id @default(uuid())
+  code      String   @unique // "IND_N", "IND_A", "IND_LFK", "PAIR", "GROUP"
+  name      String           // "Индивид Н", "Индивид А", "Инд ЛФК", "Пара", "Группа"
+  kind      String           // "INDIVIDUAL" | "PAIR" | "GROUP"
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prices         StudentServicePrice[]
+  scheduleSlots  ScheduleSlot[]
+}
+
+// Цены ученика по типам услуг (матрица student × service)
+model StudentServicePrice {
+  id            String   @id @default(uuid())
+  studentId     String
+  serviceTypeId String
+  price         Int      // тенге за единицу (час/занятие)
+  effectiveFrom String?  // ISO date — необязательное поле для будущей истории
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  student     Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  serviceType ServiceType @relation(fields: [serviceTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([studentId, serviceTypeId])
+  @@index([studentId])
+}
+
 model Group {
   id        String   @id @default(uuid())
-  name      String
-  groupType String?
+  name      String?  // для PAIR имя необязательно (генерируется из ФИО членов)
+  groupType String   @default("GROUP") // "INDIVIDUAL" | "PAIR" | "GROUP"
   teacherId String
   branchId  String?  // филиал
   createdAt DateTime @default(now())
@@ -169,6 +206,8 @@ model Group {
   members       GroupMember[]
   scheduleSlots ScheduleSlot[]
   branch        Branch?        @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  @@index([groupType])
 }
 
 model GroupMember {
@@ -186,7 +225,9 @@ model ScheduleSlot {
   id            String @id @default(uuid())
   teacherId     String
   studentId     String? // для индивидуальных занятий
-  groupId       String? // для групповых занятий
+  groupId       String? // для групповых/парных занятий
+  serviceTypeId String? // тип услуги (NULL для legacy слотов)
+  frozenPrice   Int?    // снимок цены StudentServicePrice на момент создания слота
   dayOfWeek     Int // 1=Пн, 2=Вт, 3=Ср, 4=Чт, 5=Пт, 6=Сб, 7=Вс
   startTime     String // "09:00"
   endTime       String // "10:00"
@@ -205,6 +246,7 @@ model ScheduleSlot {
   branch      Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
   student     Student?     @relation(fields: [studentId], references: [id], onDelete: SetNull)
   group       Group?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  serviceType ServiceType? @relation(fields: [serviceTypeId], references: [id], onDelete: SetNull)
   attendances Attendance[]
 }
 

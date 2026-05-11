@@ -28,8 +28,10 @@ interface SalaryEntry {
   teacherName: string;
   individualHours: number;
   groupHours: number;
+  pairHours: number;
   individualTotal: number;
   groupTotal: number;
+  pairTotal: number;
   behavioralBonus: number;
   timeBonusTotal: number;
   assistantTotal: number;
@@ -123,6 +125,12 @@ export default function SalaryReportPage() {
                       Инд: {entry.individualHours}ч ={" "}
                       {entry.individualTotal.toLocaleString()} ₸
                     </span>
+                    {entry.pairHours > 0 && (
+                      <span className="text-purple-600">
+                        Пара: {entry.pairHours}ч ={" "}
+                        {entry.pairTotal.toLocaleString()} ₸
+                      </span>
+                    )}
                     <span className="text-green-600">
                       Груп: {entry.groupHours}ч ={" "}
                       {entry.groupTotal.toLocaleString()} ₸
@@ -162,7 +170,11 @@ export default function SalaryReportPage() {
                             </TableCell>
                             <TableCell>{d.time}</TableCell>
                             <TableCell>
-                              {d.type === "INDIVIDUAL" ? "Инд." : "Груп."}
+                              {d.description.startsWith("пара:")
+                                ? "Пара"
+                                : d.type === "INDIVIDUAL"
+                                ? "Инд."
+                                : "Груп."}
                             </TableCell>
                             <TableCell>{d.description}</TableCell>
                             <TableCell className="text-right">{d.hours}</TableCell>

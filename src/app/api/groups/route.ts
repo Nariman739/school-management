@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { buildGroupDisplayName, validateGroupComposition } from "@/lib/group-utils";
 
 export async function GET() {
   try {
@@ -12,7 +13,12 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
     });
 
-    return NextResponse.json(groups);
+    const enriched = groups.map((g) => ({
+      ...g,
+      displayName: buildGroupDisplayName(g),
+    }));
+
+    return NextResponse.json(enriched);
   } catch (error) {
     console.error("Ошибка при получении списка групп:", error);
     return NextResponse.json(
@@ -25,26 +31,33 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { name, teacherId, studentIds } = body;
+    const { name, teacherId, studentIds, groupType } = body as {
+      name?: string;
+      teacherId?: string;
+      studentIds?: string[];
+      groupType?: string;
+    };
 
-    if (!name || !teacherId) {
-      return NextResponse.json(
-        { error: "Название группы и учитель обязательны для заполнения" },
-        { status: 400 }
-      );
+    const type = (groupType ?? "GROUP").toUpperCase();
+    const ids = Array.isArray(studentIds) ? studentIds : [];
+
+    if (!teacherId) {
+      return NextResponse.json({ error: "Учитель обязателен" }, { status: 400 });
+    }
+
+    const compositionError = validateGroupComposition(type, ids.length, name);
+    if (compositionError) {
+      return NextResponse.json({ error: compositionError }, { status: 400 });
     }
 
     const group = await prisma.group.create({
       data: {
-        name,
+        name: name?.trim() || null,
+        groupType: type,
         teacherId,
         members:
-          studentIds && studentIds.length > 0
-            ? {
-                createMany: {
-                  data: studentIds.map((studentId: string) => ({ studentId })),
-                },
-              }
+          ids.length > 0
+            ? { createMany: { data: ids.map((studentId) => ({ studentId })) } }
             : undefined,
       },
       include: {
@@ -55,7 +68,10 @@ export async function POST(request: NextRequest) {
 
     await logAudit({ entityType: "Group", entityId: group.id, action: "CREATE" });
 
-    return NextResponse.json(group, { status: 201 });
+    return NextResponse.json(
+      { ...group, displayName: buildGroupDisplayName(group) },
+      { status: 201 },
+    );
   } catch (error) {
     console.error("Ошибка при создании группы:", error);
     return NextResponse.json(

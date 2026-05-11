@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { freezePriceForSlot, getDefaultServiceTypeForSlot } from "@/lib/pricing";
 
 // GET /api/schedule?weekStart=2025-01-20&teacherId=xxx
 export async function GET(request: NextRequest) {
@@ -76,6 +77,7 @@ export async function POST(request: NextRequest) {
       lessonType,
       lessonCategory,
       room,
+      serviceTypeId: rawServiceTypeId,
     } = body;
 
     if (!teacherId || !dayOfWeek || !startTime || !endTime || !weekStartDate || !lessonType) {
@@ -182,11 +184,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Резолвим serviceTypeId: явный → дефолт по контексту
+    let serviceTypeId: string | null = rawServiceTypeId || null;
+    if (!serviceTypeId) {
+      let groupType: string | null = null;
+      if (groupId) {
+        const g = await prisma.group.findUnique({ where: { id: groupId }, select: { groupType: true } });
+        groupType = g?.groupType ?? null;
+      }
+      const def = await getDefaultServiceTypeForSlot({ lessonType, groupType });
+      serviceTypeId = def?.id ?? null;
+    }
+
+    const frozenPrice = await freezePriceForSlot({
+      studentId: studentId || null,
+      groupId: groupId || null,
+      serviceTypeId,
+    });
+
     const slot = await prisma.scheduleSlot.create({
       data: {
         teacherId,
         studentId: studentId || null,
         groupId: groupId || null,
+        serviceTypeId,
+        frozenPrice,
         dayOfWeek,
         startTime,
         endTime,
@@ -203,6 +225,7 @@ export async function POST(request: NextRequest) {
             members: { include: { student: true } },
           },
         },
+        serviceType: true,
       },
     });
 

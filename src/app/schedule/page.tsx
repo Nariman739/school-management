@@ -64,7 +64,9 @@ interface GroupMember {
 
 interface Group {
   id: string;
-  name: string;
+  name: string | null;
+  groupType?: "INDIVIDUAL" | "PAIR" | "GROUP";
+  displayName?: string | null;
   teacherId: string;
   members: GroupMember[];
 }
@@ -134,6 +136,8 @@ export default function SchedulePage() {
   const [formGroup, setFormGroup] = useState("");
   const [formCategory, setFormCategory] = useState("");
   const [formRoom, setFormRoom] = useState("");
+  const [formServiceTypeId, setFormServiceTypeId] = useState("");
+  const [services, setServices] = useState<{ id: string; name: string; kind: string; isActive: boolean; sortOrder: number }[]>([]);
   const [error, setError] = useState("");
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
@@ -180,10 +184,12 @@ export default function SchedulePage() {
       fetch("/api/teachers").then((r) => r.json()),
       fetch("/api/students").then((r) => r.json()),
       fetch("/api/groups").then((r) => r.json()),
-    ]).then(([t, s, g]) => {
+      fetch("/api/services").then((r) => r.json()).catch(() => []),
+    ]).then(([t, s, g, svc]) => {
       setTeachers(t);
       setStudents(s);
       setGroups(g);
+      setServices(Array.isArray(svc) ? svc.filter((x: { isActive: boolean }) => x.isActive) : []);
     });
   }, []);
 
@@ -211,6 +217,7 @@ export default function SchedulePage() {
     setFormStudent("");
     setFormGroup("");
     setFormCategory("");
+    setFormServiceTypeId("");
     const teacher = teachers.find((t) => t.id === teacherId);
     setFormRoom(teacher?.room ?? "");
     setError("");
@@ -234,6 +241,7 @@ export default function SchedulePage() {
         lessonType: formType,
         lessonCategory: (formCategory && formCategory !== "__none__") ? formCategory : null,
         room: formRoom || null,
+        serviceTypeId: formServiceTypeId || null,
       };
 
       if (formType === "INDIVIDUAL") {
@@ -782,17 +790,54 @@ export default function SchedulePage() {
                   </div>
                 ) : (
                   <div>
-                    <label className="mb-1 block text-sm font-medium">Группа</label>
+                    <label className="mb-1 block text-sm font-medium">Группа / пара</label>
                     <Select value={formGroup} onValueChange={setFormGroup}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Выберите группу" />
+                        <SelectValue placeholder="Выберите группу или пару" />
                       </SelectTrigger>
                       <SelectContent>
-                        {groups.map((g) => (
-                          <SelectItem key={g.id} value={g.id}>
-                            {g.name} ({g.members?.length || 0} уч.)
-                          </SelectItem>
-                        ))}
+                        {groups.map((g) => {
+                          const label = g.groupType === "PAIR"
+                            ? (g.displayName ?? g.members.map((m) => `${m.student.firstName} ${m.student.lastName}`).join(" + "))
+                            : (g.name ?? "—");
+                          const tag = g.groupType === "PAIR" ? "пара" : "группа";
+                          return (
+                            <SelectItem key={g.id} value={g.id}>
+                              [{tag}] {label} ({g.members?.length || 0} уч.)
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Тип услуги (опционально) */}
+                {services.length > 0 && (
+                  <div>
+                    <label className="mb-1 block text-sm font-medium">
+                      Тип услуги <span className="text-xs text-muted-foreground">(влияет на цену)</span>
+                    </label>
+                    <Select value={formServiceTypeId || "__auto__"} onValueChange={(v) => setFormServiceTypeId(v === "__auto__" ? "" : v)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__auto__">Авто (по типу занятия)</SelectItem>
+                        {services
+                          .filter((s) => {
+                            if (formType === "INDIVIDUAL") return s.kind === "INDIVIDUAL";
+                            const g = groups.find((gr) => gr.id === formGroup);
+                            if (g?.groupType === "PAIR") return s.kind === "PAIR";
+                            if (g?.groupType === "GROUP") return s.kind === "GROUP";
+                            return s.kind === "PAIR" || s.kind === "GROUP";
+                          })
+                          .sort((a, b) => a.sortOrder - b.sortOrder)
+                          .map((s) => (
+                            <SelectItem key={s.id} value={s.id}>
+                              {s.name}
+                            </SelectItem>
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>

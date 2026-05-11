@@ -7,6 +7,7 @@ type TeacherRates = {
   groupRate: number;
   groupRate3: number;
   groupRate5: number;
+  pairRate: number;
   behavioralBonus: number;
   assistantRate: number;
 };
@@ -32,6 +33,13 @@ export function getGroupRate(
   return teacher.groupRate;
 }
 
+// Ставка за пару — fallback на individualRate если pairRate=0
+export function getPairRate(
+  teacher: Pick<TeacherRates, "pairRate" | "individualRate">
+): number {
+  return teacher.pairRate > 0 ? teacher.pairRate : teacher.individualRate;
+}
+
 // Тип записи ЗП по одному уроку
 export type SalaryDetail = {
   day: number;
@@ -53,8 +61,10 @@ export type SalaryEntry = {
   teacherName: string;
   individualHours: number;
   groupHours: number;
+  pairHours: number;
   individualTotal: number;
   groupTotal: number;
+  pairTotal: number;
   behavioralBonus: number;
   timeBonusTotal: number;
   assistantTotal: number;
@@ -75,8 +85,10 @@ export function createEmptySalaryEntry(teacher: {
     teacherName: `${teacher.lastName} ${teacher.firstName} ${teacher.patronymic || ""}`.trim(),
     individualHours: 0,
     groupHours: 0,
+    pairHours: 0,
     individualTotal: 0,
     groupTotal: 0,
+    pairTotal: 0,
     behavioralBonus: 0,
     timeBonusTotal: 0,
     assistantTotal: 0,
@@ -91,6 +103,7 @@ export function recalcTotal(entry: SalaryEntry): void {
   entry.total =
     entry.individualTotal +
     entry.groupTotal +
+    entry.pairTotal +
     entry.behavioralBonus +
     entry.timeBonusTotal +
     entry.assistantTotal +

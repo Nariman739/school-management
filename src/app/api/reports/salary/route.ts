@@ -4,6 +4,7 @@ import { getTeacherPaidStatuses } from "@/lib/billing-rules";
 import {
   getTimeBonus,
   getGroupRate,
+  getPairRate,
   createEmptySalaryEntry,
   recalcTotal,
   calculateBehavioralBonus,
@@ -11,6 +12,7 @@ import {
   getWeekDates,
   type SalaryEntry,
 } from "@/lib/salary-calc";
+import { buildGroupDisplayName } from "@/lib/group-utils";
 
 // GET /api/reports/salary?weekStart=2025-01-20
 export async function GET(request: NextRequest) {
@@ -30,6 +32,7 @@ export async function GET(request: NextRequest) {
         teacher: true,
         student: true,
         group: { include: { members: { include: { student: true } } } },
+        serviceType: true,
         attendances: {
           where: { status: { in: paidStatuses } },
           include: { substituteTeacher: true, assistantTeacher: true, student: true },
@@ -62,9 +65,16 @@ export async function GET(request: NextRequest) {
       const entry = ensureEntry(actualTeacher);
       const hours = 1;
 
-      // Ставка: индивидуальная или групповая
+      // Ставка зависит от типа занятия. Приоритет: serviceType.kind, затем group.groupType, затем lessonType
+      const isPair =
+        slot.serviceType?.kind === "PAIR" || slot.group?.groupType === "PAIR";
+      const isIndividual =
+        slot.lessonType === "INDIVIDUAL" || slot.group?.groupType === "INDIVIDUAL";
+
       let rate: number;
-      if (slot.lessonType === "INDIVIDUAL") {
+      if (isPair) {
+        rate = getPairRate(actualTeacher);
+      } else if (isIndividual) {
         rate = actualTeacher.individualRate;
       } else {
         rate = getGroupRate(presentAttendances.length, actualTeacher);
@@ -78,12 +88,17 @@ export async function GET(request: NextRequest) {
       );
 
       let description = "";
-      if (slot.lessonType === "INDIVIDUAL" && slot.student) {
+      if (isPair && slot.group) {
+        description = `пара: ${buildGroupDisplayName(slot.group)}`;
+        entry.pairHours += hours;
+        entry.pairTotal += sum;
+      } else if (isIndividual && slot.student) {
         description = `${slot.student.lastName} ${slot.student.firstName}`;
         entry.individualHours += hours;
         entry.individualTotal += sum;
       } else if (slot.group) {
-        description = `гр. ${slot.group.name} (${presentAttendances.length} уч.)`;
+        const groupLabel = buildGroupDisplayName(slot.group);
+        description = `гр. ${groupLabel} (${presentAttendances.length} уч.)`;
         entry.groupHours += hours;
         entry.groupTotal += sum;
       }
@@ -124,7 +139,7 @@ export async function GET(request: NextRequest) {
         assistEntry.timeBonusTotal += assistTimeBonus;
 
         const assistDesc = slot.group
-          ? `гр. ${slot.group.name} (ассистент)`
+          ? `гр. ${buildGroupDisplayName(slot.group)} (ассистент)`
           : `${slot.student?.lastName || ""} (ассистент)`;
 
         assistEntry.details.push({
