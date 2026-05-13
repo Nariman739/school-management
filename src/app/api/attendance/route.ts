@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { buildGroupDisplayName } from "@/lib/group-utils";
 
 // GET /api/attendance?date=2025-01-20&teacherId=xxx
 export async function GET(request: NextRequest) {
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
         group: { include: { members: { include: { student: true } } } },
         attendances: {
           where: { date },
-          include: { substituteTeacher: true, assistantTeacher: true },
+          include: { substituteTeacher: true, assistantTeacher: true, assistant2Teacher: true },
         },
       },
       orderBy: [{ startTime: "asc" }],
@@ -97,6 +98,18 @@ export async function GET(request: NextRequest) {
           }
         : null;
 
+      const assistant2 = firstAtt?.assistant2TeacherId
+        ? {
+            assistantTeacherId: firstAtt.assistant2TeacherId,
+            assistantTeacherName: firstAtt.assistant2Teacher
+              ? `${firstAtt.assistant2Teacher.lastName} ${firstAtt.assistant2Teacher.firstName}`
+              : null,
+          }
+        : null;
+
+      const groupType = slot.group?.groupType ?? null;
+      const groupDisplayName = slot.group ? buildGroupDisplayName(slot.group) : null;
+
       return {
         slotId: slot.id,
         startTime: slot.startTime,
@@ -105,10 +118,13 @@ export async function GET(request: NextRequest) {
         teacherId: slot.teacher.id,
         lessonType: slot.lessonType,
         lessonCategory: slot.lessonCategory,
-        groupName: slot.group?.name || null,
+        groupName: groupDisplayName, // legacy ключ — содержит displayName для пар без имени
+        groupDisplayName,
+        groupType,
         students: slotStudents,
         substitution,
         assistant,
+        assistant2,
       };
     });
 
@@ -131,6 +147,7 @@ export async function POST(request: NextRequest) {
       isSubstitution,
       substituteTeacherId,
       assistantTeacherId,
+      assistant2TeacherId,
       reason,
       note,
       transferredToDate,
@@ -156,6 +173,7 @@ export async function POST(request: NextRequest) {
         isSubstitution: isSubstitution ?? false,
         substituteTeacherId: isSubstitution ? substituteTeacherId : null,
         assistantTeacherId: assistantTeacherId ?? null,
+        assistant2TeacherId: assistant2TeacherId ?? null,
         reason: reason ?? null,
         note: note ?? null,
         transferredToDate: status === "TRANSFERRED" ? (transferredToDate ?? null) : null,
@@ -171,6 +189,7 @@ export async function POST(request: NextRequest) {
         isSubstitution: isSubstitution ?? false,
         substituteTeacherId: isSubstitution ? substituteTeacherId : null,
         assistantTeacherId: assistantTeacherId ?? null,
+        assistant2TeacherId: assistant2TeacherId ?? null,
         reason: reason ?? null,
         note: note ?? null,
         transferredToDate: status === "TRANSFERRED" ? (transferredToDate ?? null) : null,
@@ -210,12 +229,30 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ updated: updated.count });
     }
 
+    if (action === "setAssistant2" && assistantTeacherId) {
+      const updated = await prisma.attendance.updateMany({
+        where: { scheduleSlotId, date },
+        data: { assistant2TeacherId: assistantTeacherId },
+      });
+      await logAudit({ entityType: "Attendance", entityId: scheduleSlotId, action: "UPDATE", changes: { action: { old: null, new: "setAssistant2" }, assistant2TeacherId: { old: null, new: assistantTeacherId } } });
+      return NextResponse.json({ updated: updated.count });
+    }
+
     if (action === "removeAssistant") {
       const updated = await prisma.attendance.updateMany({
         where: { scheduleSlotId, date },
         data: { assistantTeacherId: null },
       });
       await logAudit({ entityType: "Attendance", entityId: scheduleSlotId, action: "UPDATE", changes: { action: { old: null, new: "removeAssistant" } } });
+      return NextResponse.json({ updated: updated.count });
+    }
+
+    if (action === "removeAssistant2") {
+      const updated = await prisma.attendance.updateMany({
+        where: { scheduleSlotId, date },
+        data: { assistant2TeacherId: null },
+      });
+      await logAudit({ entityType: "Attendance", entityId: scheduleSlotId, action: "UPDATE", changes: { action: { old: null, new: "removeAssistant2" } } });
       return NextResponse.json({ updated: updated.count });
     }
 

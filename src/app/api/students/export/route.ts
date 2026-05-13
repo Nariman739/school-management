@@ -1,12 +1,19 @@
 import { prisma } from "@/lib/prisma";
 import { generateExcel, excelResponse } from "@/lib/excel-export";
+import { buildGroupDisplayName } from "@/lib/group-utils";
 
 // GET /api/students/export — Excel-экспорт списка учеников
 export async function GET() {
   try {
     const students = await prisma.student.findMany({
       where: { isActive: true },
-      include: { groupMembers: { include: { group: true } } },
+      include: {
+        groupMembers: {
+          include: {
+            group: { include: { members: { include: { student: true } } } },
+          },
+        },
+      },
       orderBy: { lastName: "asc" },
     });
 
@@ -18,7 +25,7 @@ export async function GET() {
       parentPhone: s.parentPhone || "",
       hourlyRate: s.hourlyRate,
       tariffType: s.tariffType === "SUBSCRIPTION" ? "Абонемент" : "Поурочно",
-      groups: s.groupMembers.map((gm) => gm.group.name).join(", ") || "—",
+      groups: s.groupMembers.map((gm) => buildGroupDisplayName(gm.group)).join(", ") || "—",
       behavioral: s.isBehavioral ? "Да" : "Нет",
     }));
 

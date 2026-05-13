@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getTeacherPaidStatuses } from "@/lib/billing-rules";
+import { buildGroupDisplayName } from "@/lib/group-utils";
 import {
   getTimeBonus,
   getGroupRate,
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
         group: { include: { members: { include: { student: true } } } },
         attendances: {
           where: { status: { in: paidStatuses } },
-          include: { substituteTeacher: true, assistantTeacher: true, student: true },
+          include: { substituteTeacher: true, assistantTeacher: true, assistant2Teacher: true, student: true },
         },
       },
     });
@@ -84,7 +85,7 @@ export async function GET(request: NextRequest) {
         entry.individualHours += hours;
         entry.individualTotal += sum;
       } else if (slot.group) {
-        description = `гр. ${slot.group.name} (${presentAttendances.length} уч.)`;
+        description = `гр. ${buildGroupDisplayName(slot.group)} (${presentAttendances.length} уч.)`;
         entry.groupHours += hours;
         entry.groupTotal += sum;
       }
@@ -113,19 +114,22 @@ export async function GET(request: NextRequest) {
 
       recalcTotal(entry);
 
-      const assistantTeacher = firstAtt.assistantTeacher;
-      if (assistantTeacher) {
-        const assistEntry = ensureEntry(assistantTeacher);
-        const assistRate = assistantTeacher.assistantRate || 0;
-        const assistTimeBonus = getTimeBonus(slot.startTime, assistantTeacher);
+      const applyAssistant = (
+        teacher: typeof firstAtt.assistantTeacher,
+        suffix: string,
+      ) => {
+        if (!teacher) return;
+        const assistEntry = ensureEntry(teacher);
+        const assistRate = teacher.assistantRate || 0;
+        const assistTimeBonus = getTimeBonus(slot.startTime, teacher);
 
         assistEntry.groupHours += 1;
         assistEntry.assistantTotal += assistRate;
         assistEntry.timeBonusTotal += assistTimeBonus;
 
         const assistDesc = slot.group
-          ? `гр. ${slot.group.name} (ассистент)`
-          : `${slot.student?.lastName || ""} (ассистент)`;
+          ? `гр. ${buildGroupDisplayName(slot.group)} (${suffix})`
+          : `${slot.student?.lastName || ""} (${suffix})`;
 
         assistEntry.details.push({
           day: slot.dayOfWeek,
@@ -142,7 +146,10 @@ export async function GET(request: NextRequest) {
         });
 
         recalcTotal(assistEntry);
-      }
+      };
+
+      applyAssistant(firstAtt.assistantTeacher, "ассистент");
+      applyAssistant(firstAtt.assistant2Teacher, "ассистент 2");
     }
 
     // Методический час

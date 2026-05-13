@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { buildGroupDisplayName } from "@/lib/group-utils";
 
 // GET /api/reports/substitutions?from=2025-01-20&to=2025-01-26
 export async function GET(request: NextRequest) {
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest) {
           include: {
             teacher: true,
             student: true,
-            group: true,
+            group: { include: { members: { include: { student: true } } } },
           },
         },
         student: true,
@@ -53,7 +54,11 @@ export async function GET(request: NextRequest) {
         lessonType: slot.lessonType,
         description: slot.lessonType === "INDIVIDUAL" && slot.student
           ? `${slot.student.lastName} ${slot.student.firstName}`
-          : slot.group ? `гр. ${slot.group.name}` : "—",
+          : slot.group
+          ? slot.group.groupType === "PAIR"
+            ? `пара ${buildGroupDisplayName(slot.group)}`
+            : `гр. ${buildGroupDisplayName(slot.group)}`
+          : "—",
         lessonCategory: slot.lessonCategory,
       });
     }

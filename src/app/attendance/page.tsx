@@ -48,9 +48,12 @@ interface AttendanceSlot {
   slotId: string; startTime: string; endTime: string;
   teacherName: string; teacherId: string;
   lessonType: string; lessonCategory: string | null; groupName: string | null;
+  groupDisplayName: string | null;
+  groupType: "INDIVIDUAL" | "PAIR" | "GROUP" | null;
   students: AttendanceStudent[];
   substitution: Substitution | null;
   assistant: Assistant | null;
+  assistant2: Assistant | null;
 }
 interface MethodistEntry {
   teacherId: string; teacherName: string; weeklyRate: number;
@@ -66,7 +69,7 @@ export default function AttendancePage() {
   const [loading, setLoading] = useState(false);
 
   // Диалоги
-  const [dialogType, setDialogType] = useState<"sub" | "assist" | null>(null);
+  const [dialogType, setDialogType] = useState<"sub" | "assist" | "assist2" | null>(null);
   const [dialogSlotId, setDialogSlotId] = useState("");
   const [dialogTeacherId, setDialogTeacherId] = useState("");
 
@@ -120,7 +123,7 @@ export default function AttendancePage() {
   };
 
   // Диалог замены/ассистента
-  const openDialog = (type: "sub" | "assist", slotId: string) => {
+  const openDialog = (type: "sub" | "assist" | "assist2", slotId: string) => {
     setDialogType(type);
     setDialogSlotId(slotId);
     setDialogTeacherId("");
@@ -136,10 +139,11 @@ export default function AttendancePage() {
         body: JSON.stringify({ scheduleSlotId: dialogSlotId, date, substituteTeacherId: dialogTeacherId }),
       });
     } else {
+      const action = dialogType === "assist2" ? "setAssistant2" : "setAssistant";
       await fetch("/api/attendance", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scheduleSlotId: dialogSlotId, date, assistantTeacherId: dialogTeacherId, action: "setAssistant" }),
+        body: JSON.stringify({ scheduleSlotId: dialogSlotId, date, assistantTeacherId: dialogTeacherId, action }),
       });
     }
 
@@ -152,20 +156,30 @@ export default function AttendancePage() {
         if (dialogType === "sub") {
           return { ...s, substitution: { substituteTeacherId: dialogTeacherId, substituteTeacherName: name } };
         }
-        return { ...s, assistant: { assistantTeacherId: dialogTeacherId, assistantTeacherName: name } };
+        const updated: Assistant = { assistantTeacherId: dialogTeacherId, assistantTeacherName: name };
+        return dialogType === "assist2"
+          ? { ...s, assistant2: updated }
+          : { ...s, assistant: updated };
       })
     );
     setDialogType(null);
   };
 
-  const removeAssistant = async (slotId: string) => {
+  const removeAssistant = async (slotId: string, slot: "assist" | "assist2" = "assist") => {
+    const action = slot === "assist2" ? "removeAssistant2" : "removeAssistant";
     await fetch("/api/attendance", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scheduleSlotId: slotId, date, action: "removeAssistant" }),
+      body: JSON.stringify({ scheduleSlotId: slotId, date, action }),
     });
     setAttendanceData((prev) =>
-      prev.map((s) => s.slotId !== slotId ? s : { ...s, assistant: null })
+      prev.map((s) =>
+        s.slotId !== slotId
+          ? s
+          : slot === "assist2"
+          ? { ...s, assistant2: null }
+          : { ...s, assistant: null },
+      ),
     );
   };
 
@@ -316,7 +330,7 @@ export default function AttendancePage() {
                         {slot.lessonCategory && <span className="ml-2 text-xs text-gray-400">({slot.lessonCategory})</span>}
                       </CardTitle>
                       <div className="flex items-center gap-2">
-                        {/* Ассистент */}
+                        {/* Ассистент 1 */}
                         {slot.assistant?.assistantTeacherName ? (
                           <Badge variant="secondary" className="cursor-pointer bg-indigo-100 text-indigo-800 hover:bg-indigo-200" onClick={() => removeAssistant(slot.slotId)}>
                             Ассистент: {slot.assistant.assistantTeacherName} ✕
@@ -325,6 +339,19 @@ export default function AttendancePage() {
                           <Button variant="outline" size="sm" className="text-xs" onClick={() => openDialog("assist", slot.slotId)}>
                             Ассистент
                           </Button>
+                        )}
+
+                        {/* Ассистент 2 — показываем только если уже есть первый ассистент */}
+                        {slot.assistant?.assistantTeacherName && (
+                          slot.assistant2?.assistantTeacherName ? (
+                            <Badge variant="secondary" className="cursor-pointer bg-indigo-50 text-indigo-700 hover:bg-indigo-100" onClick={() => removeAssistant(slot.slotId, "assist2")}>
+                              Ассистент 2: {slot.assistant2.assistantTeacherName} ✕
+                            </Badge>
+                          ) : (
+                            <Button variant="outline" size="sm" className="text-xs" onClick={() => openDialog("assist2", slot.slotId)}>
+                              + Ассистент 2
+                            </Button>
+                          )
                         )}
 
                         {/* Замена */}
@@ -338,9 +365,20 @@ export default function AttendancePage() {
                           </Button>
                         )}
 
-                        <Badge variant="secondary" className={slot.lessonType === "INDIVIDUAL" ? "bg-blue-100 text-blue-800" : "bg-green-100 text-green-800"}>
-                          {slot.lessonType === "INDIVIDUAL" ? "Индивидуальное" : `Группа: ${slot.groupName}`}
-                        </Badge>
+                        {(() => {
+                          const isPair = slot.groupType === "PAIR";
+                          const cls = slot.lessonType === "INDIVIDUAL"
+                            ? "bg-blue-100 text-blue-800"
+                            : isPair
+                            ? "bg-purple-100 text-purple-800"
+                            : "bg-green-100 text-green-800";
+                          const label = slot.lessonType === "INDIVIDUAL"
+                            ? "Индивидуальное"
+                            : isPair
+                            ? `Пара: ${slot.groupDisplayName ?? "—"}`
+                            : `Группа: ${slot.groupDisplayName ?? slot.groupName ?? "—"}`;
+                          return <Badge variant="secondary" className={cls}>{label}</Badge>;
+                        })()}
                       </div>
                     </div>
                   </CardHeader>
@@ -376,7 +414,13 @@ export default function AttendancePage() {
       <Dialog open={dialogType !== null} onOpenChange={() => setDialogType(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{dialogType === "sub" ? "Замена педагога" : "Назначить ассистента"}</DialogTitle>
+            <DialogTitle>
+              {dialogType === "sub"
+                ? "Замена педагога"
+                : dialogType === "assist2"
+                ? "Назначить второго ассистента"
+                : "Назначить ассистента"}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-gray-500">

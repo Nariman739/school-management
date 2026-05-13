@@ -109,6 +109,10 @@ function getCellStyle(slot: ScheduleSlot): string {
 function getSlotLabel(slot: ScheduleSlot): string {
   if (slot.lessonCategory === "Метод") return "метод";
   if (slot.lessonType === "GROUP" && slot.group) {
+    if (slot.group.groupType === "PAIR" || !slot.group.name) {
+      const members = slot.group.members?.map((m) => m.student.firstName).join(" + ");
+      return members ? `пара ${members}` : "пара";
+    }
     return `гр${slot.group.name}`;
   }
   if (slot.lessonType === "INDIVIDUAL" && slot.student) {
@@ -131,12 +135,18 @@ export default function SchedulePage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState("");
   const [selectedTime, setSelectedTime] = useState("09:00");
-  const [formType, setFormType] = useState<"INDIVIDUAL" | "GROUP">("INDIVIDUAL");
+  const [formType, setFormType] = useState<"INDIVIDUAL" | "PAIR" | "GROUP">("INDIVIDUAL");
   const [formStudent, setFormStudent] = useState("");
   const [formGroup, setFormGroup] = useState("");
   const [formCategory, setFormCategory] = useState("");
   const [formRoom, setFormRoom] = useState("");
   const [formServiceTypeId, setFormServiceTypeId] = useState("");
+  // Создание новой пары прямо из диалога расписания
+  const [newPairOpen, setNewPairOpen] = useState(false);
+  const [newPairStudent1, setNewPairStudent1] = useState("");
+  const [newPairStudent2, setNewPairStudent2] = useState("");
+  const [newPairError, setNewPairError] = useState("");
+  const [newPairSaving, setNewPairSaving] = useState(false);
   const [services, setServices] = useState<{ id: string; name: string; kind: string; isActive: boolean; sortOrder: number }[]>([]);
   const [error, setError] = useState("");
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
@@ -232,13 +242,16 @@ export default function SchedulePage() {
     let created = 0;
 
     for (const dayOfWeek of days) {
+      // PAIR на бэке тоже хранится как ScheduleSlot с lessonType=GROUP + groupId=Group(groupType=PAIR)
+      const lessonTypeForBackend = formType === "PAIR" ? "GROUP" : formType;
+
       const body: Record<string, unknown> = {
         teacherId: selectedTeacherId,
         dayOfWeek,
         startTime: selectedTime,
         endTime: getEndTime(selectedTime),
         weekStartDate: weekStart,
-        lessonType: formType,
+        lessonType: lessonTypeForBackend,
         lessonCategory: (formCategory && formCategory !== "__none__") ? formCategory : null,
         room: formRoom || null,
         serviceTypeId: formServiceTypeId || null,
@@ -251,6 +264,7 @@ export default function SchedulePage() {
           body.studentId = formStudent;
         }
       } else {
+        // GROUP / PAIR — оба используют formGroup (id выбранной группы или созданной пары)
         body.groupId = formGroup;
       }
 
@@ -760,19 +774,23 @@ export default function SchedulePage() {
                   <label className="mb-1 block text-sm font-medium">Тип занятия</label>
                   <Select
                     value={formType}
-                    onValueChange={(v) => setFormType(v as "INDIVIDUAL" | "GROUP")}
+                    onValueChange={(v) => {
+                      setFormType(v as "INDIVIDUAL" | "PAIR" | "GROUP");
+                      setFormGroup("");
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="INDIVIDUAL">Индивидуальное</SelectItem>
+                      <SelectItem value="PAIR">Парное</SelectItem>
                       <SelectItem value="GROUP">Групповое</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
-                {formType === "INDIVIDUAL" ? (
+                {formType === "INDIVIDUAL" && (
                   <div>
                     <label className="mb-1 block text-sm font-medium">Ученик</label>
                     <Select value={formStudent} onValueChange={setFormStudent}>
@@ -788,25 +806,62 @@ export default function SchedulePage() {
                       </SelectContent>
                     </Select>
                   </div>
-                ) : (
+                )}
+
+                {formType === "PAIR" && (() => {
+                  const pairs = groups.filter((g) => g.groupType === "PAIR");
+                  return (
+                    <div>
+                      <label className="mb-1 block text-sm font-medium">Пара</label>
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <Select value={formGroup} onValueChange={setFormGroup}>
+                            <SelectTrigger>
+                              <SelectValue placeholder={pairs.length ? "Выберите пару" : "Пары ещё не созданы"} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {pairs.map((g) => {
+                                const label = g.displayName
+                                  ?? g.members.map((m) => `${m.student.firstName} ${m.student.lastName}`).join(" + ");
+                                return (
+                                  <SelectItem key={g.id} value={g.id}>{label}</SelectItem>
+                                );
+                              })}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setNewPairStudent1("");
+                            setNewPairStudent2("");
+                            setNewPairError("");
+                            setNewPairOpen(true);
+                          }}
+                        >
+                          + Новая пара
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {formType === "GROUP" && (
                   <div>
-                    <label className="mb-1 block text-sm font-medium">Группа / пара</label>
+                    <label className="mb-1 block text-sm font-medium">Группа</label>
                     <Select value={formGroup} onValueChange={setFormGroup}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Выберите группу или пару" />
+                        <SelectValue placeholder="Выберите группу" />
                       </SelectTrigger>
                       <SelectContent>
-                        {groups.map((g) => {
-                          const label = g.groupType === "PAIR"
-                            ? (g.displayName ?? g.members.map((m) => `${m.student.firstName} ${m.student.lastName}`).join(" + "))
-                            : (g.name ?? "—");
-                          const tag = g.groupType === "PAIR" ? "пара" : "группа";
-                          return (
+                        {groups
+                          .filter((g) => g.groupType !== "PAIR")
+                          .map((g) => (
                             <SelectItem key={g.id} value={g.id}>
-                              [{tag}] {label} ({g.members?.length || 0} уч.)
+                              {g.name ?? "—"} ({g.members?.length || 0} уч.)
                             </SelectItem>
-                          );
-                        })}
+                          ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -827,10 +882,8 @@ export default function SchedulePage() {
                         {services
                           .filter((s) => {
                             if (formType === "INDIVIDUAL") return s.kind === "INDIVIDUAL";
-                            const g = groups.find((gr) => gr.id === formGroup);
-                            if (g?.groupType === "PAIR") return s.kind === "PAIR";
-                            if (g?.groupType === "GROUP") return s.kind === "GROUP";
-                            return s.kind === "PAIR" || s.kind === "GROUP";
+                            if (formType === "PAIR") return s.kind === "PAIR";
+                            return s.kind === "GROUP";
                           })
                           .sort((a, b) => a.sortOrder - b.sortOrder)
                           .map((s) => (
@@ -862,6 +915,88 @@ export default function SchedulePage() {
               </Button>
               <Button onClick={handleAddSlot}>
                 Добавить
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог создания новой пары */}
+      <Dialog open={newPairOpen} onOpenChange={setNewPairOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Новая пара</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Имя пары будет сгенерировано автоматически из ФИО учеников.
+            </p>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Первый ученик</label>
+              <Select value={newPairStudent1} onValueChange={setNewPairStudent1}>
+                <SelectTrigger><SelectValue placeholder="Выберите ученика" /></SelectTrigger>
+                <SelectContent>
+                  {students
+                    .filter((s) => s.id !== newPairStudent2)
+                    .map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{s.lastName} {s.firstName}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">Второй ученик</label>
+              <Select value={newPairStudent2} onValueChange={setNewPairStudent2}>
+                <SelectTrigger><SelectValue placeholder="Выберите ученика" /></SelectTrigger>
+                <SelectContent>
+                  {students
+                    .filter((s) => s.id !== newPairStudent1)
+                    .map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{s.lastName} {s.firstName}</SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {newPairError && (
+              <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-600">{newPairError}</div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setNewPairOpen(false)} disabled={newPairSaving}>
+                Отмена
+              </Button>
+              <Button
+                disabled={newPairSaving || !newPairStudent1 || !newPairStudent2 || newPairStudent1 === newPairStudent2}
+                onClick={async () => {
+                  setNewPairError("");
+                  setNewPairSaving(true);
+                  try {
+                    const res = await fetch("/api/groups", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        name: null,
+                        groupType: "PAIR",
+                        teacherId: selectedTeacherId,
+                        studentIds: [newPairStudent1, newPairStudent2],
+                      }),
+                    });
+                    if (!res.ok) {
+                      const data = await res.json().catch(() => ({}));
+                      setNewPairError(data?.error || "Не удалось создать пару");
+                      return;
+                    }
+                    const created = await res.json();
+                    // Обновим список групп и выберем созданную пару
+                    const groupsRes = await fetch("/api/groups");
+                    if (groupsRes.ok) setGroups(await groupsRes.json());
+                    setFormGroup(created.id);
+                    setNewPairOpen(false);
+                  } finally {
+                    setNewPairSaving(false);
+                  }
+                }}
+              >
+                {newPairSaving ? "Создание..." : "Создать"}
               </Button>
             </div>
           </div>

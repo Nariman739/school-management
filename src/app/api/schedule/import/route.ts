@@ -144,7 +144,7 @@ export async function POST(request: NextRequest) {
             const group = groups.find((g) => g.id === groupId);
             if (group) {
               match.groupId = group.id;
-              match.studentOrGroupLabel = `гр ${group.name}`;
+              match.studentOrGroupLabel = `гр ${group.name ?? ""}`;
               match.lessonType = "GROUP";
               match.errors = match.errors.filter(
                 (e) => !e.startsWith("Не найден") && !e.startsWith("Группа не найдена")

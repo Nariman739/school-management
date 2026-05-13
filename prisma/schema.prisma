@@ -76,6 +76,7 @@ model Teacher {
   scheduleSlots    ScheduleSlot[]
   substitutions    Attendance[]     @relation("SubstituteTeacher")
   assistantSlots   Attendance[]     @relation("AssistantTeacher")
+  assistant2Slots  Attendance[]     @relation("Assistant2Teacher")
   methodistChecks  MethodistCheck[]
   user             User?
   freezes          ScheduleFreeze[]
@@ -288,8 +289,9 @@ model Attendance {
   isSubstitution      Boolean  @default(false)
   substituteTeacherId String?
 
-  // Ассистент
+  // Ассистенты — до двух (большая группа)
   assistantTeacherId  String?
+  assistant2TeacherId String?
 
   // Перенос
   transferredToDate   String?  // дата на которую перенесён
@@ -303,6 +305,7 @@ model Attendance {
   student           Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
   substituteTeacher Teacher?     @relation("SubstituteTeacher", fields: [substituteTeacherId], references: [id], onDelete: SetNull)
   assistantTeacher  Teacher?     @relation("AssistantTeacher", fields: [assistantTeacherId], references: [id], onDelete: SetNull)
+  assistant2Teacher Teacher?     @relation("Assistant2Teacher", fields: [assistant2TeacherId], references: [id], onDelete: SetNull)
 
   @@unique([scheduleSlotId, studentId, date])
 }
