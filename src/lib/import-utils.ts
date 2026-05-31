@@ -281,13 +281,68 @@ export function matchTeacher(
     if (byNameInitial.length === 1) return byNameInitial[0];
   }
 
+  // Имя + Отчество + инициал фамилии: "Дарья Александровна Х." → firstName="Дарья",
+  // patronymic="Александровна", lastName starts with "Х"
+  if (words.length === 3) {
+    const [firstName, patronymic, lastInitialRaw] = words;
+    const lastInitial = lastInitialRaw.replace(/\./g, "");
+    if (lastInitial.length <= 2) {
+      const byThree = teachers.filter((t) =>
+        t.firstName.toLowerCase() === firstName &&
+        (t.patronymic ?? "").toLowerCase() === patronymic &&
+        t.lastName.toLowerCase().startsWith(lastInitial)
+      );
+      if (byThree.length === 1) return byThree[0];
+    }
+  }
+
   // Частичное совпадение фамилии
   const byPartial = teachers.filter((t) =>
     t.lastName.toLowerCase().startsWith(normalized)
   );
   if (byPartial.length === 1) return byPartial[0];
 
+  // Фоллбэк: Levenshtein на «Имя Отчество». Помогает на типах опечаток типа Дайана/Даяна.
+  // Считаем по конкатенации Имя+Отчество без пробелов, чтобы дистанция была чувствительной
+  // к одной-двум перестановкам букв.
+  const compact = (s: string): string => s.replace(/\s+/g, "").toLowerCase();
+  const normCompact = compact(normalized);
+  if (normCompact.length >= 8) {
+    const scored = teachers
+      .map((t) => {
+        const fp = compact(`${t.firstName}${t.patronymic ?? ""}`);
+        return { teacher: t, dist: levenshtein(normCompact, fp) };
+      })
+      .sort((a, b) => a.dist - b.dist);
+
+    const best = scored[0];
+    const second = scored[1];
+    // Принимаем только если: дистанция мала (<=2) И отрыв от второго кандидата явный (>=2).
+    if (best && best.dist <= 2 && (!second || second.dist - best.dist >= 2)) {
+      return best.teacher;
+    }
+  }
+
   return null;
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const prev = new Array<number>(n + 1);
+  const curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j];
+  }
+  return prev[n];
 }
 
 export function matchStudentOrGroup(
@@ -518,19 +573,29 @@ export function detectFormat(grid: string[][]): "v1-simple" | "v2-multiblock" {
 function splitIntoBlocks(grid: string[][]): string[][][] {
   const blocks: string[][][] = [];
   let currentBlock: string[][] = [];
-  let emptyCount = 0;
+  let separatorRun = 0;
+
+  // Строка-разделитель = пустая, либо "почти пустая" (≤2 заполненных ячеек, не считая первой
+  // колонки времени). Между блоками у Дархана бывают строки с 1-4 ячейками заметок/легенды —
+  // их нельзя считать частью блока, иначе соседние блоки склеиваются.
+  const isSeparator = (row: string[]): boolean => {
+    let nonEmpty = 0;
+    for (let i = 1; i < row.length; i++) {
+      if (row[i]?.trim()) nonEmpty++;
+      if (nonEmpty > 2) return false;
+    }
+    return true;
+  };
 
   for (const row of grid) {
-    const isEmptyRow = row.every((cell) => !cell.trim());
-
-    if (isEmptyRow) {
-      emptyCount++;
-      if (currentBlock.length >= 3 && emptyCount >= 1) {
+    if (isSeparator(row)) {
+      separatorRun++;
+      if (currentBlock.length >= 3 && separatorRun >= 1) {
         blocks.push(currentBlock);
         currentBlock = [];
       }
     } else {
-      emptyCount = 0;
+      separatorRun = 0;
       currentBlock.push(row);
     }
   }
@@ -569,8 +634,8 @@ function parseTeacherHeaderV2(header: string): {
     remaining = remaining.replace(roomMatch[0], "").trim();
   }
 
-  // Извлечь специализацию: "И", "А", "Тех", "И+А"
-  const SPEC_PATTERN = /\s+(И\+А|И|А|ТЕХ)\s*$/i;
+  // Извлечь специализацию: "И", "А", "Тех", "И+А", "АФК", "ЛОГ"
+  const SPEC_PATTERN = /\s+(И\+А|И|А|ТЕХ|АФК|ЛОГ)\s*$/i;
   let specialization: string | null = null;
   const specMatch = remaining.match(SPEC_PATTERN);
   if (specMatch) {
@@ -601,6 +666,31 @@ function parseBlockColumns(block: string[][]): BlockTeacher[] {
     // Пропускаем служебные заголовки
     const headerLower = headerCell.toLowerCase();
     if (headerLower.includes("практикант") || headerLower.includes("стажер") || headerLower.includes("стажёр")) continue;
+    // Служебные заголовки правых колонок (заметки/легенда)
+    const SERVICE_HEADERS = ["методисты", "время", "сопр", "мно", "комментарий", "примечание", "заметка"];
+    if (SERVICE_HEADERS.some((s) => headerLower === s || headerLower.startsWith(s + " "))) continue;
+    // Маркеры дней попавшие в заголовок: "пн ср пт", "вт чт"
+    if (/^(пн|вт|ср|чт|пт|сб|вс)([\s,]+(пн|вт|ср|чт|пт|сб|вс))+$/i.test(headerCell)) continue;
+    // Чистим заголовок от кабинета (№1каб, №11 каб, № 5каб, №1 + 3 + 4 каб) для дальнейших проверок
+    const cleaned = headerCell
+      .replace(/№\s*[\d\s+]+\s*каб[^\s]*/gi, "")
+      .replace(/№\s*[\d\s+]+/g, "")
+      .trim();
+    // После очистки от кабинета: если ещё остались цифры или двоеточие — это заметка/правка
+    // ("рамзана в 11:00 ИМ"), не имя педагога.
+    if (/[\d:]/.test(cleaned)) continue;
+    // Текст полностью в верхнем регистре без строчных букв — служебная аббревиатура ("МЕТОДИСТЫ")
+    const lettersOnly = cleaned.replace(/[^а-яёa-zА-ЯЁA-Z]/g, "");
+    if (lettersOnly.length >= 3 && lettersOnly === lettersOnly.toUpperCase()) continue;
+    // Одно слово без специализации (И/А/ТЕХ/И+А) и без признаков ФИО (отчества) — не педагог.
+    // Имена педагогов либо содержат >=2 слова (Имя Отчество), либо имеют суффикс специализации,
+    // либо казахские отчества типа "Азаматқызы".
+    {
+      const hasSpec = /\s+(И\+А|И|А|ТЕХ)\s*$/i.test(cleaned);
+      const hasMultipleWords = cleaned.split(/\s+/).filter(Boolean).length >= 2;
+      const hasKzPatronymic = /(қызы|улы|ұлы|кызы)$/i.test(cleaned);
+      if (!hasSpec && !hasMultipleWords && !hasKzPatronymic) continue;
+    }
 
     const { displayName, specialization, room } = parseTeacherHeaderV2(headerCell);
 
@@ -681,10 +771,15 @@ const CATEGORY_SUFFIXES_V2: Record<string, string> = {
 };
 
 function parseCellValueV2(cell: string): ParsedCellV2 {
-  const trimmed = cell.trim();
+  // Нормализация: схлопываем множественные пробелы, убираем NBSP, убираем мусорные начала ("/")
+  const trimmed = cell
+    .replace(/ /g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^\/+\s*/, "")
+    .trim();
 
   // Пустые / отменённые
-  if (!trimmed || /^-+$/.test(trimmed)) {
+  if (!trimmed || /^-+$/.test(trimmed) || trimmed === "/") {
     return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
   }
 
@@ -705,8 +800,8 @@ function parseCellValueV2(cell: string): ParsedCellV2 {
     return { type: "method", names: [], groupName: null, category: "Метод", dayOverride: null, raw: trimmed };
   }
 
-  // Сопровождение группы: "сопр грМ0", "сопргрМНО ОНР"
-  const supportGroupMatch = trimmed.match(/^сопр\s*гр\.?\s*(.+)/i);
+  // Сопровождение группы: "сопр грМ0", "сопргрМНО ОНР", "сорп гр..." (опечатка)
+  const supportGroupMatch = trimmed.match(/^(?:сопр|сорп)\s*гр\.?\s*(.+)/i);
   if (supportGroupMatch) {
     return {
       type: "support_group",
@@ -762,40 +857,72 @@ function parseCellValueV2(cell: string): ParsedCellV2 {
     }
   }
 
-  // Индивидуальный ученик: "Асанали И", "МаркВ И пн-пт", "Улпан А ср пт"
+  // Индивидуальный ученик: "Асанали И", "МаркВ И пн-пт", "Улпан А ср пт",
+  // "Алихан мно пн ср", "Самира ТЕХ.", "Алинурнов. ЛОГ.", "Алан нов И".
+  // Стратегия: вырезаем все «хвостовые» токены (дни, категории, флаг «нов», точки)
+  // в любом порядке, пока остаётся что-то распознаваемое.
   let remaining = trimmed;
-  let dayOverride: number[] | null = null;
-
-  // Извлечь дни из конца: "пн-пт", "ср пт"
-  const dayPattern = /\s+((?:пн|вт|ср|чт|пт)(?:[\s-]+(?:пн|вт|ср|чт|пт))*)\s*$/i;
-  const dayMatch = remaining.match(dayPattern);
-  if (dayMatch) {
-    dayOverride = parseDayList(dayMatch[1]);
-    remaining = remaining.slice(0, dayMatch.index!).trim();
-  }
-
-  // Извлечь категорию (последнее слово)
-  const words = remaining.split(/\s+/);
+  const dayOverrideSet = new Set<number>();
   let category: string | null = null;
 
-  if (words.length >= 2) {
-    const lastWord = words[words.length - 1].toLowerCase();
-    if (CATEGORY_SUFFIXES_V2[lastWord]) {
-      category = CATEGORY_SUFFIXES_V2[lastWord];
-      words.pop();
+  // Многократно сбрасываем хвосты: дни, категорию, флаг «нов», точки.
+  for (let safety = 0; safety < 8; safety++) {
+    const before = remaining;
+
+    // 1. Хвостовые дни: "пн-пт", "ср пт", "пн,пт", "ср"
+    const dayPattern = /[\s,]+((?:пн|вт|ср|чт|пт)(?:[\s,\-]+(?:пн|вт|ср|чт|пт))*)\.?\s*$/i;
+    const dayMatch = remaining.match(dayPattern);
+    if (dayMatch) {
+      const days = parseDayList(dayMatch[1]) ?? [];
+      for (const d of days) dayOverrideSet.add(d);
+      remaining = remaining.slice(0, dayMatch.index!).trim();
     }
+
+    // 2. Хвостовая категория (И/А/ТЕХ/СОПР/ДЗ/РЛ/каз/МНО/мно/нов/лог/афк), возможно с точкой
+    const words = remaining.split(/\s+/);
+    if (words.length >= 2) {
+      const lastWordRaw = words[words.length - 1];
+      const lastWord = lastWordRaw.toLowerCase().replace(/\.+$/, "");
+      const isFlag = lastWord === "нов";
+      if (CATEGORY_SUFFIXES_V2[lastWord]) {
+        if (!category) category = CATEGORY_SUFFIXES_V2[lastWord];
+        words.pop();
+        remaining = words.join(" ");
+      } else if (isFlag) {
+        // «нов» — пометка «новый ученик», для матчинга не нужна
+        words.pop();
+        remaining = words.join(" ");
+      } else if (lastWord === "лог" || lastWord === "логопед") {
+        if (!category) category = "ЛОГ";
+        words.pop();
+        remaining = words.join(" ");
+      } else if (lastWord === "афк") {
+        if (!category) category = "АФК";
+        words.pop();
+        remaining = words.join(" ");
+      }
+    }
+
+    // 3. Хвостовые точки и пробелы
+    remaining = remaining.replace(/[.\s]+$/, "").trim();
+
+    if (remaining === before) break;
   }
 
-  const name = words.join(" ");
+  const dayOverride = dayOverrideSet.size > 0 ? Array.from(dayOverrideSet).sort() : null;
 
   // Имя заканчивается на "-" → отменённый слот
-  if (name.endsWith("-")) {
+  if (remaining.endsWith("-")) {
+    return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
+  }
+
+  if (!remaining) {
     return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
   }
 
   return {
     type: "student",
-    names: [name],
+    names: [remaining],
     groupName: null,
     category,
     dayOverride,
