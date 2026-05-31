@@ -22,6 +22,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { STATUS_LABELS, STATUS_COLORS } from "@/lib/billing-rules";
+import { DAYS_OF_WEEK, getMonday, addWeeks, formatWeekRange } from "@/lib/schedule-utils";
+
+interface StudentScheduleSlot {
+  id: string;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  lessonType: string;
+  lessonCategory: string | null;
+  room: string | null;
+  isCancelled: boolean;
+  teacher: { id: string; fullName: string };
+  group: { id: string; name: string | null } | null;
+}
 
 interface StudentCard {
   student: {
@@ -56,10 +70,33 @@ export default function StudentCardPage() {
   const [freezeForm, setFreezeForm] = useState({ startDate: "", endDate: "", reason: "", type: "OTHER" });
   const [recalcDialog, setRecalcDialog] = useState(false);
   const [recalcForm, setRecalcForm] = useState({ amount: "", reason: "", period: "" });
-  const [tab, setTab] = useState<"info" | "attendance" | "payments" | "freezes" | "crm">("info");
+  const [tab, setTab] = useState<"info" | "attendance" | "schedule" | "payments" | "freezes" | "crm">("info");
   const [interactions, setInteractions] = useState<{ id: string; type: string; date: string; note: string; promisedPayDate: string | null; promisedAmount: number | null }[]>([]);
   const [crmDialog, setCrmDialog] = useState(false);
   const [crmForm, setCrmForm] = useState({ type: "CALL", date: "", note: "", promisedPayDate: "", promisedAmount: "" });
+
+  // Расписание ученика
+  const [weekStart, setWeekStart] = useState<string>(() => getMonday(new Date()));
+  const [scheduleSlots, setScheduleSlots] = useState<StudentScheduleSlot[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+
+  const fetchSchedule = useCallback(async () => {
+    if (!id) return;
+    setScheduleLoading(true);
+    try {
+      const res = await fetch(`/api/students/${id}/schedule?weekStart=${weekStart}`);
+      if (res.ok) {
+        const data = await res.json();
+        setScheduleSlots(data.slots || []);
+      }
+    } finally {
+      setScheduleLoading(false);
+    }
+  }, [id, weekStart]);
+
+  useEffect(() => {
+    if (tab === "schedule") fetchSchedule();
+  }, [tab, fetchSchedule]);
 
   const fetchCard = useCallback(async () => {
     const res = await fetch(`/api/students/${id}/card`);
@@ -189,6 +226,7 @@ export default function StudentCardPage() {
       <div className="mb-4 flex gap-1 rounded-lg bg-gray-100 p-1">
         {[
           { key: "info", label: "Информация" },
+          { key: "schedule", label: "Расписание" },
           { key: "attendance", label: "Посещения" },
           { key: "payments", label: "Оплаты" },
           { key: "freezes", label: "Заморозки" },
@@ -274,6 +312,80 @@ export default function StudentCardPage() {
             </Card>
           )}
         </div>
+      )}
+
+      {tab === "schedule" && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <CardTitle className="text-base">Персональное расписание</CardTitle>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setWeekStart(addWeeks(weekStart, -1))}
+                >
+                  ←
+                </Button>
+                <span className="min-w-[140px] text-center text-sm font-medium">
+                  {formatWeekRange(weekStart)}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setWeekStart(addWeeks(weekStart, 1))}
+                >
+                  →
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {scheduleLoading ? (
+              <div className="text-sm text-gray-400">Загрузка...</div>
+            ) : scheduleSlots.length === 0 ? (
+              <div className="text-sm text-gray-400">Нет занятий на эту неделю</div>
+            ) : (
+              <div className="space-y-4">
+                {DAYS_OF_WEEK.filter((d) => d.value <= 6).map((day) => {
+                  const daySlots = scheduleSlots.filter((s) => s.dayOfWeek === day.value);
+                  if (daySlots.length === 0) return null;
+                  return (
+                    <div key={day.value}>
+                      <div className="mb-2 text-sm font-semibold text-gray-700">{day.full}</div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-[100px]">Время</TableHead>
+                            <TableHead>Педагог</TableHead>
+                            <TableHead className="w-[110px]">Тип</TableHead>
+                            <TableHead className="w-[110px]">Категория</TableHead>
+                            <TableHead className="w-[80px]">Кабинет</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {daySlots.map((s) => (
+                            <TableRow key={s.id} className={s.isCancelled ? "text-gray-400 line-through" : ""}>
+                              <TableCell className="font-mono">{s.startTime}–{s.endTime}</TableCell>
+                              <TableCell>{s.teacher.fullName}</TableCell>
+                              <TableCell>
+                                {s.lessonType === "GROUP"
+                                  ? (s.group?.name ? `гр ${s.group.name}` : "Группа")
+                                  : s.lessonType === "PAIR" ? "Пара" : "Индив"}
+                              </TableCell>
+                              <TableCell>{s.lessonCategory ?? "—"}</TableCell>
+                              <TableCell>{s.room ?? "—"}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {tab === "attendance" && (
