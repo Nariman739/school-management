@@ -109,6 +109,7 @@ model Student {
 
   groupMembers    GroupMember[]
   scheduleSlots   ScheduleSlot[]
+  slotAttendees   SlotAttendee[]
   attendances     Attendance[]
   payments        Payment[]
   freezes         ScheduleFreeze[]
@@ -249,6 +250,23 @@ model ScheduleSlot {
   group       Group?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
   serviceType ServiceType? @relation(fields: [serviceTypeId], references: [id], onDelete: SetNull)
   attendances Attendance[]
+  attendees   SlotAttendee[]
+}
+
+// Динамический состав группового слота: кто конкретно ходит на этот час этой недели.
+// Если для слота есть SlotAttendee — он переопределяет состав GroupMember (фиксированный
+// шаблон группы). Если SlotAttendee нет — используется GroupMember как раньше (backward
+// compatible с legacy-слотами).
+model SlotAttendee {
+  id        String @id @default(uuid())
+  slotId    String
+  studentId String
+
+  slot    ScheduleSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  student Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([slotId, studentId])
+  @@index([studentId])
 }
 
 // Заморозка расписания (каникулы и т.д.)

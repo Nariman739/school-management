@@ -19,6 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   TIME_SLOTS,
   DAY_GROUPS,
+  DAYS_OF_WEEK,
   LESSON_CATEGORIES,
   getMonday,
   addWeeks,
@@ -71,6 +72,16 @@ interface Group {
   members: GroupMember[];
 }
 
+interface SlotAttendee {
+  id: string;
+  slotId: string;
+  studentId: string;
+  student: {
+    lastName: string;
+    firstName: string;
+  };
+}
+
 interface ScheduleSlot {
   id: string;
   teacherId: string;
@@ -86,6 +97,7 @@ interface ScheduleSlot {
   teacher: Teacher;
   student: Student | null;
   group: (Group & { members: GroupMember[] }) | null;
+  attendees?: SlotAttendee[];
 }
 
 
@@ -156,6 +168,13 @@ export default function SchedulePage() {
   const [freezeStart, setFreezeStart] = useState("");
   const [freezeEnd, setFreezeEnd] = useState("");
   const [freezeReason, setFreezeReason] = useState("");
+
+  // Диалог редактирования состава группового/парного слота
+  const [attendeesDialogOpen, setAttendeesDialogOpen] = useState(false);
+  const [attendeesSlot, setAttendeesSlot] = useState<ScheduleSlot | null>(null);
+  const [attendeesSelected, setAttendeesSelected] = useState<Set<string>>(new Set());
+  const [attendeesSaving, setAttendeesSaving] = useState(false);
+  const [attendeesError, setAttendeesError] = useState("");
 
   // Импорт из Google Sheets
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -323,6 +342,43 @@ export default function SchedulePage() {
     }
 
     fetchSlots();
+  };
+
+  const openAttendeesDialog = (slot: ScheduleSlot) => {
+    if (!slot.group) return;
+    setAttendeesSlot(slot);
+    setAttendeesError("");
+    const memberIds = slot.group.members.map((m) => m.student.id);
+    if (slot.attendees && slot.attendees.length > 0) {
+      setAttendeesSelected(new Set(slot.attendees.map((a) => a.studentId)));
+    } else {
+      // По умолчанию все члены группы посещают
+      setAttendeesSelected(new Set(memberIds));
+    }
+    setAttendeesDialogOpen(true);
+  };
+
+  const handleSaveAttendees = async () => {
+    if (!attendeesSlot) return;
+    setAttendeesSaving(true);
+    setAttendeesError("");
+    try {
+      const res = await fetch(`/api/schedule/${attendeesSlot.id}/attendees`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentIds: [...attendeesSelected] }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setAttendeesError(data?.error || "Не удалось сохранить");
+        return;
+      }
+      setAttendeesDialogOpen(false);
+      setAttendeesSlot(null);
+      fetchSlots();
+    } finally {
+      setAttendeesSaving(false);
+    }
   };
 
   const handleCopyWeek = async () => {
@@ -689,13 +745,29 @@ export default function SchedulePage() {
                       >
                         {slot ? (
                           <div
-                            className={`cursor-pointer rounded px-2 py-1 text-xs ${getCellStyle(slot)}`}
-                            onClick={() => handleDeleteSlot(slot.id)}
-                            title={`${getSlotLabel(slot)}${slot.room ? ` | ${slot.room}` : ""}\nНажмите для удаления`}
+                            className={`relative rounded px-2 py-1 text-xs ${getCellStyle(slot)}`}
+                            title={`${getSlotLabel(slot)}${slot.room ? ` | ${slot.room}` : ""}`}
                           >
-                            <div className="font-medium truncate">
+                            <div
+                              className="cursor-pointer font-medium truncate pr-10"
+                              onClick={() => handleDeleteSlot(slot.id)}
+                              title="Нажмите для удаления"
+                            >
                               {getSlotLabel(slot)}
                             </div>
+                            {slot.lessonType === "GROUP" && slot.group && (
+                              <button
+                                type="button"
+                                className="absolute right-1 top-1/2 -translate-y-1/2 rounded bg-white/70 px-1 py-0.5 text-[9px] font-medium text-gray-700 hover:bg-white"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openAttendeesDialog(slot);
+                                }}
+                                title="Изменить состав занятия"
+                              >
+                                Состав
+                              </button>
+                            )}
                           </div>
                         ) : (
                           <button
@@ -1445,6 +1517,75 @@ export default function SchedulePage() {
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setFreezeDialogOpen(false)}>Отмена</Button>
               <Button onClick={handleFreeze}>Заморозить</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог редактирования состава группового/парного занятия */}
+      <Dialog open={attendeesDialogOpen} onOpenChange={setAttendeesDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {attendeesSlot
+                ? `Состав занятия — ${attendeesSlot.teacher.lastName} ${attendeesSlot.teacher.firstName}, ${
+                    DAYS_OF_WEEK.find((d) => d.value === attendeesSlot.dayOfWeek)?.full ?? ""
+                  } ${attendeesSlot.startTime}`
+                : "Состав занятия"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {attendeesError && (
+              <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-600">
+                {attendeesError}
+              </div>
+            )}
+            {attendeesSlot?.group?.members.length ? (
+              <div className="space-y-2">
+                {attendeesSlot.group.members.map((m) => {
+                  const checked = attendeesSelected.has(m.student.id);
+                  return (
+                    <label
+                      key={m.student.id}
+                      className="flex cursor-pointer items-center gap-2 rounded border p-2 hover:bg-gray-50"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4"
+                        checked={checked}
+                        onChange={(e) => {
+                          setAttendeesSelected((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(m.student.id);
+                            else next.delete(m.student.id);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span className="text-sm">
+                        {m.student.lastName} {m.student.firstName}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">В группе нет учеников.</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Снятый чекбокс = ученик НЕ ходит на этот час этой недели. Сохранится только для этого слота.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setAttendeesDialogOpen(false)}
+                disabled={attendeesSaving}
+              >
+                Отмена
+              </Button>
+              <Button onClick={handleSaveAttendees} disabled={attendeesSaving}>
+                {attendeesSaving ? "Сохранение..." : "Сохранить"}
+              </Button>
             </div>
           </div>
         </DialogContent>
