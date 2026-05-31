@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { freezePriceForSlot, getDefaultServiceTypeForSlot } from "@/lib/pricing";
+import { DAY_GROUPS } from "@/lib/schedule-utils";
 
 // GET /api/schedule?weekStart=2025-01-20&teacherId=xxx
 export async function GET(request: NextRequest) {
@@ -22,10 +23,11 @@ export async function GET(request: NextRequest) {
     if (teacherId) {
       where.teacherId = teacherId;
     }
-    if (dayGroup === "mwf") {
-      where.dayOfWeek = { in: [1, 3, 5] };
-    } else if (dayGroup === "tt") {
-      where.dayOfWeek = { in: [2, 4] };
+    if (dayGroup) {
+      const dg = DAY_GROUPS.find((g) => g.id === dayGroup);
+      if (dg) {
+        where.dayOfWeek = { in: dg.days };
+      }
     }
 
     const slots = await prisma.scheduleSlot.findMany({
@@ -47,6 +49,9 @@ export async function GET(request: NextRequest) {
               include: { student: true },
             },
           },
+        },
+        attendees: {
+          include: { student: true },
         },
       },
       orderBy: [{ dayOfWeek: "asc" }, { startTime: "asc" }],
@@ -78,7 +83,21 @@ export async function POST(request: NextRequest) {
       lessonCategory,
       room,
       serviceTypeId: rawServiceTypeId,
-    } = body;
+      attendees,
+    } = body as {
+      teacherId: string;
+      studentId?: string;
+      groupId?: string;
+      dayOfWeek: number;
+      startTime: string;
+      endTime: string;
+      weekStartDate: string;
+      lessonType: string;
+      lessonCategory?: string;
+      room?: string;
+      serviceTypeId?: string;
+      attendees?: string[];
+    };
 
     if (!teacherId || !dayOfWeek || !startTime || !endTime || !weekStartDate || !lessonType) {
       return NextResponse.json(
@@ -216,6 +235,9 @@ export async function POST(request: NextRequest) {
         lessonType,
         lessonCategory: lessonCategory || null,
         room: room || null,
+        attendees: attendees && attendees.length > 0
+          ? { createMany: { data: attendees.map((studentId) => ({ studentId })) } }
+          : undefined,
       },
       include: {
         teacher: true,
@@ -226,6 +248,7 @@ export async function POST(request: NextRequest) {
           },
         },
         serviceType: true,
+        attendees: { include: { student: true } },
       },
     });
 

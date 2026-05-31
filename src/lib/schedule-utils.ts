@@ -31,6 +31,7 @@ export const LESSON_CATEGORIES = [
 export const DAY_GROUPS = [
   { id: "mwf", label: "Пн / Ср / Пт", days: [1, 3, 5] },
   { id: "tt", label: "Вт / Чт", days: [2, 4] },
+  { id: "sat", label: "Сб", days: [6] },
 ];
 
 export function getMonday(date: Date): string {
