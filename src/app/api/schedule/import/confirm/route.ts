@@ -9,7 +9,7 @@ interface SlotToCreate {
   groupId?: string | null;
   pairStudentIds?: string[]; // когда импорт распознал пару из ячейки "X+Y"
   startTime: string;
-  dayGroup: "mwf" | "tt";
+  dayGroup: "mwf" | "tt" | "sat";
   lessonType: string; // "INDIVIDUAL" | "PAIR" | "GROUP"
   lessonCategory?: string | null;
   room?: string | null;

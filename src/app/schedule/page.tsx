@@ -176,13 +176,17 @@ export default function SchedulePage() {
   const [attendeesSaving, setAttendeesSaving] = useState(false);
   const [attendeesError, setAttendeesError] = useState("");
 
-  // Импорт из Google Sheets
+  // Импорт из Google Sheets / xlsx
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importUrl, setImportUrl] = useState("");
   const [importPreview, setImportPreview] = useState<ImportPreviewV2 | null>(null);
   const [importLoading, setImportLoading] = useState(false);
   const [importError, setImportError] = useState("");
   const [importStage, setImportStage] = useState<"input" | "preview">("input");
+  // Для xlsx-загрузки: список листов и выбранный
+  const [importSheets, setImportSheets] = useState<string[] | null>(null);
+  const [importSelectedSheet, setImportSelectedSheet] = useState<string>("");
+  const [importWorkbookFile, setImportWorkbookFile] = useState<File | null>(null);
   // Ручное сопоставление: index строки → что выбрал пользователь
   const [resolutions, setResolutions] = useState<Map<number, RowResolution>>(new Map());
   // Диалог сохранения псевдонимов после импорта
@@ -447,7 +451,46 @@ export default function SchedulePage() {
     setImportError("");
     setImportStage("input");
     setResolutions(new Map());
+    setImportSheets(null);
+    setImportSelectedSheet("");
+    setImportWorkbookFile(null);
     setImportDialogOpen(true);
+  };
+
+  const handleSelectXlsxFile = async (file: File) => {
+    setImportError("");
+    setImportLoading(true);
+    try {
+      const XLSX = await import("xlsx");
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: "array" });
+      setImportWorkbookFile(file);
+      setImportSheets(wb.SheetNames);
+      // Авто-выбор: если только один лист или есть имя похожее на текущую неделю
+      const fallback = wb.SheetNames[0];
+      setImportSelectedSheet(fallback);
+    } catch (e) {
+      console.error(e);
+      setImportError("Не удалось прочитать файл");
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const buildGridFromXlsx = async (
+    file: File,
+    sheetName: string,
+  ): Promise<string[][]> => {
+    const XLSX = await import("xlsx");
+    const data = await file.arrayBuffer();
+    const wb = XLSX.read(data, { type: "array" });
+    const ws = wb.Sheets[sheetName];
+    const grid: unknown[][] = XLSX.utils.sheet_to_json(ws, {
+      header: 1,
+      defval: "",
+      raw: false,
+    }) as unknown[][];
+    return grid.map((row) => row.map((c) => (c == null ? "" : String(c))));
   };
 
   const handleLoadPreview = async () => {
@@ -455,10 +498,24 @@ export default function SchedulePage() {
     setImportError("");
 
     try {
+      // Из xlsx → собираем grid на клиенте, шлём в API готовым
+      const useXlsx = !!importWorkbookFile && !!importSelectedSheet;
+      const body: Record<string, unknown> = {
+        weekStart,
+        dayGroup: activeDayGroup,
+        preview: true,
+      };
+
+      if (useXlsx) {
+        body.gridData = await buildGridFromXlsx(importWorkbookFile!, importSelectedSheet);
+      } else {
+        body.sheetUrl = importUrl;
+      }
+
       const res = await fetch("/api/schedule/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetUrl: importUrl, weekStart, dayGroup: activeDayGroup, preview: true }),
+        body: JSON.stringify(body),
       });
 
       const data = await res.json();
@@ -487,7 +544,7 @@ export default function SchedulePage() {
         studentId?: string | null;
         groupId?: string | null;
         startTime: string;
-        dayGroup: "mwf" | "tt";
+        dayGroup: "mwf" | "tt" | "sat";
         lessonType: string;
         lessonCategory?: string | null;
         room?: string | null;
@@ -561,7 +618,9 @@ export default function SchedulePage() {
           studentId,
           groupId,
           startTime: m.startTime!,
-          dayGroup: m.dayGroup,
+          // v3-saturday: парсер выставляет dayGroup="mwf" как placeholder, но семантически
+          // это суббота. Переопределяем здесь.
+          dayGroup: importPreview.detectedFormat === "v3-saturday" ? "sat" : m.dayGroup,
           lessonType,
           lessonCategory: m.lessonCategory ?? null,
           room: m.room ?? null,
@@ -1111,22 +1170,74 @@ export default function SchedulePage() {
           {importStage === "input" && (
             <div className="space-y-4">
               <p className="text-sm text-gray-600">
-                Вставьте ссылку на Google Таблицу с расписанием. Таблица должна быть открыта для просмотра по ссылке.
+                Вставьте ссылку на Google Таблицу <em>или</em> загрузите файл .xlsx.
               </p>
               <input
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
                 value={importUrl}
-                onChange={(e) => setImportUrl(e.target.value)}
+                onChange={(e) => {
+                  setImportUrl(e.target.value);
+                  if (e.target.value) {
+                    setImportSheets(null);
+                    setImportWorkbookFile(null);
+                  }
+                }}
                 placeholder="https://docs.google.com/spreadsheets/d/..."
+                disabled={!!importWorkbookFile}
               />
+              <div className="relative">
+                <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-gray-200" />
+                <div className="relative text-center">
+                  <span className="bg-white px-2 text-xs text-gray-400">или</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  className="block w-full text-sm text-gray-600 file:mr-3 file:rounded-md file:border-0 file:bg-gray-100 file:px-3 file:py-1.5 file:text-sm file:font-medium hover:file:bg-gray-200"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      setImportUrl("");
+                      handleSelectXlsxFile(f);
+                    }
+                  }}
+                  disabled={importLoading}
+                />
+                {importWorkbookFile && importSheets && (
+                  <div className="space-y-1">
+                    <label className="text-xs text-gray-500">Выберите лист (страницу):</label>
+                    <select
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs"
+                      value={importSelectedSheet}
+                      onChange={(e) => setImportSelectedSheet(e.target.value)}
+                    >
+                      {importSheets.map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-400">
+                      Найдено листов: {importSheets.length}. Имя листа обычно = дата субботы или диапазон недели.
+                    </p>
+                  </div>
+                )}
+              </div>
               <p className="text-xs text-gray-400">
                 Импорт на неделю <strong>{formatWeekRange(weekStart)}</strong>
+                {activeDayGroup === "sat" && <span> (суббота)</span>}
               </p>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setImportDialogOpen(false)}>
                   Отмена
                 </Button>
-                <Button onClick={handleLoadPreview} disabled={!importUrl.trim() || importLoading}>
+                <Button
+                  onClick={handleLoadPreview}
+                  disabled={
+                    importLoading ||
+                    (!importUrl.trim() && !(importWorkbookFile && importSelectedSheet))
+                  }
+                >
                   {importLoading ? "Загрузка..." : "Загрузить превью"}
                 </Button>
               </div>
@@ -1140,6 +1251,10 @@ export default function SchedulePage() {
                 {importPreview.detectedFormat === "v2-multiblock" ? (
                   <span className="rounded bg-blue-100 px-2 py-1 text-xs text-blue-800">
                     Многоблочный · {importPreview.blocksDetected} бл. · {importPreview.teachersDetected.length} уч.
+                  </span>
+                ) : importPreview.detectedFormat === "v3-saturday" ? (
+                  <span className="rounded bg-purple-100 px-2 py-1 text-xs text-purple-800">
+                    Субботнее · {importPreview.teachersDetected.length} уч.
                   </span>
                 ) : (
                   <span className="rounded bg-gray-100 px-2 py-1 text-xs">Простой формат</span>

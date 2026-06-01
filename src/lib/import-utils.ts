@@ -524,9 +524,11 @@ export interface MatchedRowV2 extends MatchedRow {
   room: string | null;
 }
 
+export type ImportFormatV2 = "v1-simple" | "v2-multiblock" | "v3-saturday";
+
 export interface ImportPreviewV2 extends ImportPreview {
   matches: MatchedRowV2[];
-  detectedFormat: "v1-simple" | "v2-multiblock";
+  detectedFormat: ImportFormatV2;
   blocksDetected: number;
   teachersDetected: string[];
 }
@@ -551,7 +553,9 @@ interface ParsedCellV2 {
 
 // --- V2: Автодетекция формата ---
 
-export function detectFormat(grid: string[][]): "v1-simple" | "v2-multiblock" {
+export function detectFormat(
+  grid: string[][],
+): "v1-simple" | "v2-multiblock" | "v3-saturday" {
   if (grid.length < 3) return "v1-simple";
 
   // Ищем маркеры дней ("пн ср пт" / "вт чт") в первых 5 строках
@@ -563,6 +567,17 @@ export function detectFormat(grid: string[][]): "v1-simple" | "v2-multiblock" {
       return (c.includes("пн") && c.includes("пт")) || c === "вт чт";
     });
     if (hasDayMarkers) return "v2-multiblock";
+  }
+
+  // v3 (суббота): один блок, время в строках, нет пн/ср/пт колонок. Триггер —
+  // первая колонка содержит «время» (10.00/11.00/12.00) подряд в 2+ строках.
+  let timeRows = 0;
+  for (let i = 0; i < Math.min(10, grid.length); i++) {
+    const cell = (grid[i]?.[0] ?? "").toString().trim();
+    if (/^(09|10|11|12|13|14)[.:]00/.test(cell) || /^(09|10|11|12|13|14):00:00$/.test(cell)) {
+      timeRows++;
+      if (timeRows >= 2) return "v3-saturday";
+    }
   }
 
   return "v1-simple";
@@ -900,6 +915,14 @@ function parseCellValueV2(cell: string): ParsedCellV2 {
         if (!category) category = "АФК";
         words.pop();
         remaining = words.join(" ");
+      } else if (lastWord === "акад" || lastWord === "академ") {
+        if (!category) category = "А";
+        words.pop();
+        remaining = words.join(" ");
+      } else if (lastWord === "инт" || lastWord === "интенсив") {
+        if (!category) category = "И";
+        words.pop();
+        remaining = words.join(" ");
       }
     }
 
@@ -1194,9 +1217,13 @@ export function matchGridV2(
   teachers: TeacherRecord[],
   students: StudentRecord[],
   groups: GroupRecord[],
-  detectedFormat?: "v1-simple" | "v2-multiblock"
+  detectedFormat?: ImportFormatV2,
 ): ImportPreviewV2 {
   const format = detectedFormat ?? detectFormat(grid);
+
+  if (format === "v3-saturday") {
+    return matchGridV3Saturday(grid, teachers, students, groups);
+  }
 
   if (format === "v1-simple") {
     // Делегируем в старый матчинг для обратной совместимости
@@ -1284,5 +1311,222 @@ export function matchGridV2(
     detectedFormat: "v2-multiblock",
     blocksDetected: blocksCount,
     teachersDetected: teacherNames,
+  };
+}
+
+// =====================================================================
+// V3: Субботнее расписание (один блок, время в строках, dayOfWeek=6)
+// =====================================================================
+//
+// Формат у Дархана:
+//   Строка 1: [Время] | АртурВ | РЖ | НД | ОИ/АЕ | Дильназ Ж | ... — педагоги
+//             в сокращениях. Иногда "ПП\ДМ" = два педагога на колонке.
+//   Строка 2: иногда служебная (09:00:00)
+//   Строки 3+: 10.00 | Ердар | Расул | ... — время + ученики
+//   Стоп при пустой строке или строке заметок (ДЕТИ / ПЕДАГОГИ / 1).
+//
+// Все слоты получают dayOfWeek=6.
+
+// Раскрывает сокращение педагога ("АртурВ", "РЖ", "Дильназ Ж", "ОИ/АЕ", "ПП\ДМ").
+// Возвращает список имён (один или два — при двойном заголовке).
+function splitTeacherHeader(header: string): string[] {
+  // Разделители: \, /, "," (запятая для "ДМ, АЕ,")
+  return header
+    .split(/[\\\/,]/)
+    .map((s) => s.trim().replace(/[,\s]+$/g, ""))
+    .filter(Boolean);
+}
+
+// Матч педагога по сокращению. Поддерживает:
+//   "АртурВ" → Имя=Артур, инициал отчества/фамилии=В
+//   "РЖ", "НД" → две заглавных = инициалы Имя+Отчества
+//   "Дильназ Ж" → имя + первая буква отчества/фамилии
+//   "ФатимаА", "ДарьяВ", "АленаВ" → ИмяБ (буква фамилии)
+//   "Аида Т", "Айдана Т" → имя + первая буква отчества/фамилии
+//   "Дарья Е" → может конфликтовать (две Дарьи); вернём null
+function matchTeacherByAbbr(
+  abbr: string,
+  teachers: TeacherRecord[],
+): TeacherRecord | null {
+  const cleaned = abbr.trim();
+  if (!cleaned) return null;
+
+  // 2-3 буквенная аббревиатура из заглавных: "РЖ" → Имя+Отчество, "ДАХ" → Имя+Отч+Фам
+  if (/^[А-ЯЁA-Z]{2,3}\.?$/.test(cleaned)) {
+    const letters = cleaned.replace(/\./g, "").split("");
+    const candidates = teachers.filter((t) => {
+      const first = t.firstName.charAt(0).toUpperCase();
+      const patron = (t.patronymic ?? "").charAt(0).toUpperCase();
+      const last = t.lastName.charAt(0).toUpperCase();
+      if (letters.length === 2) {
+        // Имя+Отчество (приоритет) ИЛИ Имя+Фамилия
+        return first === letters[0] && (patron === letters[1] || last === letters[1]);
+      }
+      return first === letters[0] && patron === letters[1] && last === letters[2];
+    });
+    if (candidates.length === 1) return candidates[0];
+    // При неоднозначности отдаём приоритет совпадению Имя+Отчество
+    if (candidates.length > 1) {
+      const byPatron = candidates.filter(
+        (t) => letters.length >= 2 && (t.patronymic ?? "").charAt(0).toUpperCase() === letters[1],
+      );
+      if (byPatron.length === 1) return byPatron[0];
+      if (byPatron.length > 0) return byPatron[0];
+      return candidates[0];
+    }
+  }
+
+  // "ИмяБ" (имя + 1-2 буквы фамилии/отчества слитно): "АртурВ", "ФатимаА", "ДарьяВ"
+  const fusedMatch = cleaned.match(/^([А-ЯЁA-Z][а-яёa-z]+)([А-ЯЁA-Z]{1,2})$/);
+  if (fusedMatch) {
+    const [, firstNameMaybe, suffix] = fusedMatch;
+    const candidates = teachers.filter((t) => {
+      if (t.firstName.toLowerCase() !== firstNameMaybe.toLowerCase()) return false;
+      const patron = (t.patronymic ?? "").toUpperCase();
+      const last = t.lastName.toUpperCase();
+      return patron.startsWith(suffix) || last.startsWith(suffix);
+    });
+    if (candidates.length === 1) return candidates[0];
+    // Приоритет: фамилия начинается с suffix (АртурВ → Алфутов Артур Васильевич — патронимик)
+    // ДарьяВ может быть Вячеславовна (отчество) или Владимеровна (отчество).
+    // Берём по отчеству первой.
+    if (candidates.length > 1) {
+      const byPatron = candidates.filter((t) => (t.patronymic ?? "").toUpperCase().startsWith(suffix));
+      if (byPatron.length >= 1) return byPatron[0];
+      return candidates[0];
+    }
+  }
+
+  // "Имя Б" (имя + первая буква отчества/фамилии через пробел): "Дильназ Ж", "Аида Т"
+  const spacedMatch = cleaned.match(/^([А-ЯЁA-Z][а-яёa-z]+)\s+([А-ЯЁA-Z])\.?$/);
+  if (spacedMatch) {
+    const [, firstNameMaybe, suffix] = spacedMatch;
+    const candidates = teachers.filter((t) => {
+      if (t.firstName.toLowerCase() !== firstNameMaybe.toLowerCase()) return false;
+      const patron = (t.patronymic ?? "").charAt(0).toUpperCase();
+      const last = t.lastName.charAt(0).toUpperCase();
+      return patron === suffix || last === suffix;
+    });
+    if (candidates.length === 1) return candidates[0];
+    if (candidates.length > 1) {
+      const byPatron = candidates.filter((t) => (t.patronymic ?? "").charAt(0).toUpperCase() === suffix);
+      if (byPatron.length >= 1) return byPatron[0];
+      return candidates[0];
+    }
+  }
+
+  // Полное имя — пробуем стандартный matchTeacher
+  return matchTeacher(cleaned, teachers);
+}
+
+// Строка-стоппер: ниже неё парсинг прекращается (служебные заметки).
+function isV3StopRow(row: string[]): boolean {
+  const joined = row.join(" ").toLowerCase().trim();
+  if (!joined) return true;
+  // "ДЕТИ" / "ПЕДАГОГИ" / "1 Максим 2ч с 10"
+  if (/(дети|педагог|расход|подсчёт)/i.test(joined)) return true;
+  // Строка с одиночными порядковыми номерами в первой колонке
+  const first = (row[0] ?? "").trim();
+  if (/^\d{1,2}$/.test(first)) return true;
+  return false;
+}
+
+function matchGridV3Saturday(
+  grid: string[][],
+  teachers: TeacherRecord[],
+  students: StudentRecord[],
+  groups: GroupRecord[],
+): ImportPreviewV2 {
+  const matches: MatchedRowV2[] = [];
+  const teachersDetected: string[] = [];
+
+  if (grid.length < 2) {
+    return {
+      totalRows: 0,
+      validRows: 0,
+      errorRows: 0,
+      matches: [],
+      detectedFormat: "v3-saturday",
+      blocksDetected: 1,
+      teachersDetected: [],
+    };
+  }
+
+  // Заголовки педагогов в строке 1, колонки 2+ (B+).
+  const headerRow = grid[0];
+  const headerColumns: { col: number; primary: string; secondary?: string }[] = [];
+  for (let c = 1; c < headerRow.length; c++) {
+    const raw = (headerRow[c] ?? "").trim();
+    if (!raw) continue;
+    const parts = splitTeacherHeader(raw);
+    if (parts.length === 0) continue;
+    headerColumns.push({ col: c, primary: parts[0], secondary: parts[1] });
+    teachersDetected.push(parts[0] + (parts[1] ? ` / ${parts[1]}` : ""));
+  }
+
+  // Строки данных: пропускаем строку заголовка (0). Дальше — для каждой строки
+  // проверяем что в первой колонке есть время.
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (isV3StopRow(row)) break;
+
+    const timeRaw = (row[0] ?? "").trim();
+    const parsedTime = parseTime(timeRaw);
+    if (!parsedTime) continue; // строка без времени — пропускаем (служебная)
+
+    for (const hc of headerColumns) {
+      const cellValue = (row[hc.col] ?? "").trim();
+      if (!cellValue) continue;
+
+      const teacher = matchTeacherByAbbr(hc.primary, teachers);
+      const cell: GridCellV2 = {
+        teacherName: hc.primary,
+        cellValue,
+        time: parsedTime,
+        rowIndex: r,
+        colIndex: hc.col,
+        dayGroup: "mwf", // не используется для v3 — все слоты будут на dayOfWeek=6
+        room: null,
+      };
+
+      const parsed = parseCellValueV2(cellValue);
+      if (parsed.type === "skip") continue;
+
+      const row2 = matchSingleCellV2(cell, parsed, teachers, students, groups);
+
+      // Подменяем учителя на найденного через abbr (matchSingleCellV2 матчит по
+      // hc.primary, что часто не работает для сокращений — переопределим).
+      if (teacher && !row2.teacherId) {
+        row2.teacherId = teacher.id;
+        row2.teacherLabel = `${teacher.lastName} ${teacher.firstName}`;
+        row2.errors = row2.errors.filter((e) => !e.startsWith("Учитель не найден"));
+      } else if (!teacher && row2.teacherId) {
+        // фоллбэк уже сработал, ничего не делаем
+      } else if (!teacher && hc.primary) {
+        // явная ошибка
+        if (!row2.errors.some((e) => e.startsWith("Учитель не найден"))) {
+          row2.errors.push(`Учитель не найден: "${hc.primary}"`);
+        }
+      }
+
+      // Если есть второй педагог в заголовке (ПП\ДМ) — добавим в label
+      if (hc.secondary) {
+        row2.studentOrGroupLabel = `${row2.studentOrGroupLabel ?? ""} [также: ${hc.secondary}]`.trim();
+      }
+
+      matches.push(row2);
+    }
+  }
+
+  const validRows = matches.filter((m) => m.errors.length === 0).length;
+
+  return {
+    totalRows: matches.length,
+    validRows,
+    errorRows: matches.length - validRows,
+    matches,
+    detectedFormat: "v3-saturday",
+    blocksDetected: 1,
+    teachersDetected,
   };
 }

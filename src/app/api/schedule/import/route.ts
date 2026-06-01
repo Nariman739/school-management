@@ -15,47 +15,62 @@ import type { ImportPreviewV2, MatchedRowV2 } from "@/lib/import-utils";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { sheetUrl, weekStart, dayGroup, preview } = body;
+    const { sheetUrl, weekStart, dayGroup, preview, gridData } = body as {
+      sheetUrl?: string;
+      weekStart: string;
+      dayGroup?: string;
+      preview?: boolean;
+      gridData?: unknown[][]; // если клиент уже распарсил xlsx локально
+    };
 
-    if (!sheetUrl || !weekStart) {
+    if (!weekStart) {
+      return NextResponse.json({ error: "weekStart обязателен" }, { status: 400 });
+    }
+    if (!sheetUrl && !gridData) {
       return NextResponse.json(
-        { error: "sheetUrl и weekStart обязательны" },
-        { status: 400 }
+        { error: "Нужно передать sheetUrl или gridData" },
+        { status: 400 },
       );
     }
 
-    // 1. Извлечь ID таблицы
-    const sheetId = extractSheetId(sheetUrl);
-    if (!sheetId) {
-      return NextResponse.json(
-        { error: "Неверный формат ссылки на Google Таблицу" },
-        { status: 400 }
+    let gridWithEmpty: string[][];
+
+    if (gridData) {
+      gridWithEmpty = gridData.map((row) =>
+        row.map((cell) => (cell == null ? "" : String(cell))),
       );
-    }
-
-    // 2. Загрузить CSV
-    const csvUrl = buildCsvUrl(sheetId);
-    let csvData: string;
-
-    try {
-      const csvRes = await fetch(csvUrl, { signal: AbortSignal.timeout(15000) });
-      if (!csvRes.ok) {
+    } else {
+      const sheetId = extractSheetId(sheetUrl!);
+      if (!sheetId) {
         return NextResponse.json(
-          { error: "Не удалось загрузить таблицу. Проверьте, что она открыта для просмотра по ссылке." },
-          { status: 400 }
+          { error: "Неверный формат ссылки на Google Таблицу" },
+          { status: 400 },
         );
       }
-      csvData = await csvRes.text();
-    } catch (fetchError) {
-      console.error("Ошибка при загрузке Google Sheet:", fetchError);
-      return NextResponse.json(
-        { error: "Не удалось загрузить таблицу. Проверьте ссылку и доступ." },
-        { status: 400 }
-      );
+      const csvUrl = buildCsvUrl(sheetId);
+      let csvData: string;
+      try {
+        const csvRes = await fetch(csvUrl, { signal: AbortSignal.timeout(15000) });
+        if (!csvRes.ok) {
+          return NextResponse.json(
+            {
+              error:
+                "Не удалось загрузить таблицу. Проверьте, что она открыта для просмотра по ссылке.",
+            },
+            { status: 400 },
+          );
+        }
+        csvData = await csvRes.text();
+      } catch (fetchError) {
+        console.error("Ошибка при загрузке Google Sheet:", fetchError);
+        return NextResponse.json(
+          { error: "Не удалось загрузить таблицу. Проверьте ссылку и доступ." },
+          { status: 400 },
+        );
+      }
+      gridWithEmpty = parseCsvToGrid(csvData, true);
     }
 
-    // 3. Определить формат и парсить CSV
-    const gridWithEmpty = parseCsvToGrid(csvData, true);
     const format = detectFormat(gridWithEmpty);
 
     if (format === "v1-simple" && !dayGroup) {
@@ -65,7 +80,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const grid = format === "v2-multiblock" ? gridWithEmpty : parseCsvToGrid(csvData);
+    // v2 и v3 хотят сохранять пустые строки (разделители блоков / стопперы),
+    // v1 — может работать со сжатой сеткой.
+    const grid =
+      format === "v2-multiblock" || format === "v3-saturday"
+        ? gridWithEmpty
+        : gridWithEmpty.filter((row) => row.some((c) => (c ?? "").toString().trim()));
 
     if (grid.length < 2) {
       return NextResponse.json(
