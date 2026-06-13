@@ -6,7 +6,7 @@ export async function GET() {
   try {
     const teachers = await prisma.teacher.findMany({
       where: { isActive: true },
-      orderBy: { lastName: "asc" },
+      orderBy: [{ teacherNumber: "asc" }, { lastName: "asc" }],
     });
 
     return NextResponse.json(teachers);
@@ -17,6 +17,22 @@ export async function GET() {
       { status: 500 }
     );
   }
+}
+
+async function nextTeacherNumber(): Promise<number> {
+  // Аналогично studentNumber: сначала sequence, иначе fallback на MAX+1
+  try {
+    const rows = await prisma.$queryRawUnsafe<{ nextval: bigint }[]>(
+      `SELECT nextval('teacher_number_seq') AS nextval;`,
+    );
+    const v = rows?.[0]?.nextval;
+    if (typeof v === "bigint") return Number(v);
+    if (typeof v === "number") return v;
+  } catch {
+    // sequence ещё не создан — fallback
+  }
+  const agg = await prisma.teacher.aggregate({ _max: { teacherNumber: true } });
+  return (agg._max.teacherNumber ?? 0) + 1;
 }
 
 export async function POST(request: NextRequest) {
@@ -54,8 +70,11 @@ export async function POST(request: NextRequest) {
 
     const parseRate = (v: unknown) => (v ? parseInt(String(v), 10) : 0);
 
+    const teacherNumber = await nextTeacherNumber();
+
     const teacher = await prisma.teacher.create({
       data: {
+        teacherNumber,
         lastName,
         firstName,
         patronymic: patronymic || null,

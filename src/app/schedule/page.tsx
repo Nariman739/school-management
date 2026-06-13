@@ -46,6 +46,7 @@ interface PendingAlias {
 
 interface Teacher {
   id: string;
+  teacherNumber?: number | null;
   lastName: string;
   firstName: string;
   patronymic: string | null;
@@ -56,6 +57,7 @@ interface Student {
   id: string;
   lastName: string;
   firstName: string;
+  studentNumber?: number | null;
 }
 
 interface GroupMember {
@@ -118,18 +120,31 @@ function getCellStyle(slot: ScheduleSlot): string {
   return "bg-blue-50 text-blue-800";
 }
 
+// Формат ID ученика для отображения в расписании: «001», «042», «112»…
+// Дархан в фидбеке 12.06 просил убрать букву фамилии и показывать ID,
+// чтобы избежать путаницы между одноимёнными детьми.
+function formatStudentId(num?: number | null): string {
+  if (num == null) return "";
+  return num.toString().padStart(3, "0");
+}
+
+function studentDisplay(s: { firstName: string; lastName: string; studentNumber?: number | null }): string {
+  const id = formatStudentId(s.studentNumber);
+  return id ? `${s.firstName} ${id}` : `${s.firstName} ${s.lastName[0] ?? ""}.`;
+}
+
 function getSlotLabel(slot: ScheduleSlot): string {
   if (slot.lessonCategory === "Метод") return "метод";
   if (slot.lessonType === "GROUP" && slot.group) {
     if (slot.group.groupType === "PAIR" || !slot.group.name) {
-      const members = slot.group.members?.map((m) => m.student.firstName).join(" + ");
+      const members = slot.group.members?.map((m) => studentDisplay(m.student)).join(" + ");
       return members ? `пара ${members}` : "пара";
     }
     return `гр${slot.group.name}`;
   }
   if (slot.lessonType === "INDIVIDUAL" && slot.student) {
     const suffix = slot.lessonCategory ? ` ${slot.lessonCategory}` : "";
-    return `${slot.student.lastName}${suffix}`;
+    return `${studentDisplay(slot.student)}${suffix}`;
   }
   return "—";
 }
@@ -778,7 +793,12 @@ export default function SchedulePage() {
                     className="border-b border-r bg-gray-50 p-2 text-center text-xs font-medium text-gray-700"
                     style={{ minWidth: 110 }}
                   >
-                    <div>{teacher.firstName} {teacher.lastName[0]}.</div>
+                    <div>
+                      {teacher.firstName}{" "}
+                      {teacher.teacherNumber != null
+                        ? teacher.teacherNumber.toString().padStart(2, "0")
+                        : `${teacher.lastName[0] ?? ""}.`}
+                    </div>
                     {teacher.room && (
                       <div className="text-[10px] font-normal text-gray-400">
                         {teacher.room}

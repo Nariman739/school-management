@@ -361,9 +361,12 @@ export function matchStudentOrGroup(
   // "гр М0", "гр МНО", "группа М1" → группа
   const groupMatch = normalized.match(/^(?:группа\s+|гр\.?\s*)(.*)/);
   if (groupMatch) {
-    const groupName = groupMatch[1].trim();
+    // Нормализация: убираем все пробелы и подчёркивания внутри имени группы,
+    // чтобы «ОНР2» / «ОНР 2» / «ОНР_2» матчились одинаково. Дархан в видео 12.06
+    // явно просил: «иногда с пробелом, без пробела — для него это принципиально».
+    const groupName = groupMatch[1].replace(/[\s_]+/g, "").trim();
     const found = groups.find((g) => {
-      const n = (g.name ?? "").toLowerCase();
+      const n = (g.name ?? "").toLowerCase().replace(/[\s_]+/g, "");
       return n && (n === groupName || n.includes(groupName));
     });
     return found

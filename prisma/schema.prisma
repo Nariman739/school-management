@@ -40,6 +40,7 @@ model User {
 
 model Teacher {
   id             String   @id @default(uuid())
+  teacherNumber  Int?     @unique // порядковый № педагога (заполняется через sequence)
   lastName       String
   firstName      String
   patronymic     String?
