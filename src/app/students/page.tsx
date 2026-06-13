@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { getConsultationInfo } from "@/lib/consultation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,6 +32,8 @@ interface Student {
   parentPhone: string | null;
   hourlyRate: number;
   isActive: boolean;
+  lastConsultationDate: string | null;
+  consultationIntervalMonths: number | null;
 }
 
 interface ServiceType {
@@ -320,6 +323,19 @@ export default function StudentsPage() {
                     <a href={`/students/${student.id}`} className="text-blue-600 hover:underline">
                       {student.lastName}
                     </a>
+                    {(() => {
+                      const ci = getConsultationInfo({
+                        lastConsultationDate: student.lastConsultationDate,
+                        consultationIntervalMonths: student.consultationIntervalMonths,
+                      });
+                      if (ci.status === "overdue") {
+                        return <span className="ml-2 text-red-600" title={ci.label}>🔔</span>;
+                      }
+                      if (ci.status === "due_soon") {
+                        return <span className="ml-2 text-amber-500" title={ci.label}>🔔</span>;
+                      }
+                      return null;
+                    })()}
                   </TableCell>
                   <TableCell>{student.firstName}</TableCell>
                   <TableCell className="text-muted-foreground">

@@ -63,6 +63,10 @@ export async function GET(request: NextRequest) {
         charged,
         paid,
         balance,
+        // Передаём поля консультации в UI оплат — Дархан в фидбеке 12.06: «когда
+        // мы принимаем оплату, чтобы этот ребёнок прямо в системе мозолил глаза».
+        lastConsultationDate: s.lastConsultationDate,
+        consultationIntervalMonths: s.consultationIntervalMonths,
       };
     });
 

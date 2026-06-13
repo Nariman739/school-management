@@ -1,5 +1,7 @@
 "use client";
 
+import { getConsultationInfo } from "@/lib/consultation";
+
 import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +23,8 @@ interface StudentBalance {
   charged: number;
   paid: number;
   balance: number;
+  lastConsultationDate?: string | null;
+  consultationIntervalMonths?: number | null;
 }
 
 interface PaymentRecord {
@@ -176,7 +180,22 @@ export default function PaymentsPage() {
             >
               <CardContent className="flex items-center justify-between py-4">
                 <div>
-                  <div className="font-medium">{b.studentName}</div>
+                  <div className="font-medium">
+                    {b.studentName}
+                    {(() => {
+                      const ci = getConsultationInfo({
+                        lastConsultationDate: b.lastConsultationDate,
+                        consultationIntervalMonths: b.consultationIntervalMonths,
+                      });
+                      if (ci.status === "overdue") {
+                        return <span className="ml-2 text-red-600" title={ci.label}>🔔 консультация просрочена</span>;
+                      }
+                      if (ci.status === "due_soon") {
+                        return <span className="ml-2 text-amber-500" title={ci.label}>🔔 скоро консультация</span>;
+                      }
+                      return null;
+                    })()}
+                  </div>
                   <div className="text-xs text-gray-500">
                     {b.parentName} · {b.parentPhone} · {b.hourlyRate} ₸/час
                   </div>

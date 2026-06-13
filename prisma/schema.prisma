@@ -104,6 +104,13 @@ model Student {
   enrollmentDate      String?  // дата начала обучения
   notes               String?  // заметки администратора
 
+  // Консультации — фидбек Дархана 12.06: «когда мы считаем зарплату или принимаем
+  // оплату, чтобы этот ребёнок прямо в системе мозолил глаза, если консультация
+  // просрочена». Хранится только последняя дата + интервал, при вбитии новой
+  // даты сбрасывается отсчёт.
+  lastConsultationDate       String?  // "YYYY-MM-DD" — когда последний раз провели
+  consultationIntervalMonths Int?     // через сколько месяцев нужна следующая (1, 2, 3...)
+
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

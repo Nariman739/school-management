@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { STATUS_LABELS, STATUS_COLORS } from "@/lib/billing-rules";
+import { getConsultationInfo, getConsultationBadge } from "@/lib/consultation";
 import { DAYS_OF_WEEK, getMonday, addWeeks, formatWeekRange } from "@/lib/schedule-utils";
 
 interface StudentScheduleSlot {
@@ -52,6 +53,8 @@ interface StudentCard {
     subscriptionLessons: number | null;
     enrollmentDate: string | null;
     notes: string | null;
+    lastConsultationDate: string | null;
+    consultationIntervalMonths: number | null;
     groupMembers: { group: { name: string; teacher: { lastName: string; firstName: string } } }[];
     studentFreezes: { id: string; startDate: string; endDate: string; reason: string; type: string }[];
     recalculations: { id: string; amount: number; reason: string; period: string; createdAt: string }[];
@@ -93,6 +96,60 @@ export default function StudentCardPage() {
       setScheduleLoading(false);
     }
   }, [id, weekStart]);
+
+  // Консультации
+  const [consultDialog, setConsultDialog] = useState(false);
+  const [consultForm, setConsultForm] = useState({ date: "", intervalMonths: "" });
+
+  const openConsultDialog = () => {
+    if (!data) return;
+    setConsultForm({
+      date: data.student.lastConsultationDate ?? "",
+      intervalMonths: data.student.consultationIntervalMonths?.toString() ?? "",
+    });
+    setConsultDialog(true);
+  };
+
+  const handleSaveConsult = async () => {
+    if (!id) return;
+    const s = data!.student;
+    const res = await fetch(`/api/students/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lastName: s.lastName, firstName: s.firstName, patronymic: s.patronymic,
+        parentName: s.parentName, parentPhone: s.parentPhone,
+        hourlyRate: s.hourlyRate, tariffType: s.tariffType,
+        subscriptionRate: s.subscriptionRate, subscriptionLessons: s.subscriptionLessons,
+        enrollmentDate: s.enrollmentDate, notes: s.notes, isBehavioral: s.isBehavioral,
+        lastConsultationDate: consultForm.date || null,
+        consultationIntervalMonths: consultForm.intervalMonths ? Number(consultForm.intervalMonths) : null,
+      }),
+    });
+    if (res.ok) {
+      setConsultDialog(false);
+      fetchCard();
+    }
+  };
+
+  const handleMarkConsultDone = async () => {
+    if (!id) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const s = data!.student;
+    const res = await fetch(`/api/students/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lastName: s.lastName, firstName: s.firstName, patronymic: s.patronymic,
+        parentName: s.parentName, parentPhone: s.parentPhone,
+        hourlyRate: s.hourlyRate, tariffType: s.tariffType,
+        subscriptionRate: s.subscriptionRate, subscriptionLessons: s.subscriptionLessons,
+        enrollmentDate: s.enrollmentDate, notes: s.notes, isBehavioral: s.isBehavioral,
+        lastConsultationDate: today,
+      }),
+    });
+    if (res.ok) fetchCard();
+  };
 
   useEffect(() => {
     if (tab === "schedule") fetchSchedule();
@@ -177,6 +234,19 @@ export default function StudentCardPage() {
               </Badge>
             ))}
             {student.isBehavioral && <Badge className="bg-red-100 text-red-800">ПВД</Badge>}
+            {(() => {
+              const ci = getConsultationInfo({
+                lastConsultationDate: student.lastConsultationDate,
+                consultationIntervalMonths: student.consultationIntervalMonths,
+              });
+              if (ci.status === "ok" || ci.status === "missing") return null;
+              const cls = ci.status === "overdue" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800";
+              return (
+                <Badge className={cls} title={ci.label}>
+                  🔔 Консультация{ci.status === "overdue" ? " просрочена" : " скоро"}
+                </Badge>
+              );
+            })()}
           </div>
         </div>
         <div className="flex gap-2">
@@ -283,6 +353,72 @@ export default function StudentCardPage() {
               <CardContent><p className="text-sm">{student.notes}</p></CardContent>
             </Card>
           )}
+
+          {/* Консультации — фидбек Дархана 12.06 */}
+          {(() => {
+            const ci = getConsultationInfo({
+              lastConsultationDate: student.lastConsultationDate,
+              consultationIntervalMonths: student.consultationIntervalMonths,
+            });
+            const statusColor =
+              ci.status === "overdue" ? "bg-red-50 border-red-200" :
+              ci.status === "due_soon" ? "bg-amber-50 border-amber-200" :
+              ci.status === "ok" ? "bg-green-50 border-green-200" :
+              "bg-gray-50 border-gray-200";
+            return (
+              <Card className={statusColor}>
+                <CardHeader className="flex flex-row items-center justify-between">
+                  <CardTitle className="text-base">Консультации</CardTitle>
+                  <div className="flex gap-2">
+                    {student.lastConsultationDate && (
+                      <Button variant="outline" size="sm" onClick={handleMarkConsultDone}>
+                        Провести сегодня
+                      </Button>
+                    )}
+                    <Button variant="outline" size="sm" onClick={openConsultDialog}>
+                      Изменить
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {student.lastConsultationDate ? (
+                    <div className="space-y-1 text-sm">
+                      <div>
+                        <span className="text-gray-500">Последняя:</span>{" "}
+                        <strong>{student.lastConsultationDate}</strong>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Интервал:</span>{" "}
+                        {student.consultationIntervalMonths
+                          ? `${student.consultationIntervalMonths} мес.`
+                          : "не задан"}
+                      </div>
+                      {ci.nextDueDate && (
+                        <div>
+                          <span className="text-gray-500">Следующая:</span>{" "}
+                          <strong>{ci.nextDueDate}</strong>
+                          {" — "}
+                          <span
+                            className={
+                              ci.status === "overdue" ? "text-red-700 font-semibold" :
+                              ci.status === "due_soon" ? "text-amber-700 font-semibold" :
+                              "text-gray-600"
+                            }
+                          >
+                            {ci.label}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-400">
+                      Консультация ещё не проводилась. Нажмите «Изменить» чтобы задать.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {student.recalculations.length > 0 && (
             <Card>
@@ -631,6 +767,40 @@ export default function StudentCardPage() {
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setRecalcDialog(false)}>Отмена</Button>
               <Button onClick={handleRecalc}>Создать</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={consultDialog} onOpenChange={setConsultDialog}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Консультация</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Дата последней консультации</Label>
+              <Input
+                type="date"
+                value={consultForm.date}
+                onChange={(e) => setConsultForm({ ...consultForm, date: e.target.value })}
+              />
+              <p className="mt-1 text-xs text-gray-400">Пусто = консультация ещё не проводилась.</p>
+            </div>
+            <div>
+              <Label>Интервал между консультациями (мес.)</Label>
+              <Input
+                type="number"
+                min="1"
+                value={consultForm.intervalMonths}
+                onChange={(e) => setConsultForm({ ...consultForm, intervalMonths: e.target.value })}
+                placeholder="2"
+              />
+              <p className="mt-1 text-xs text-gray-400">
+                Дархан рекомендует 1-2 месяца для большинства, 3 для стабильных.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setConsultDialog(false)}>Отмена</Button>
+              <Button onClick={handleSaveConsult}>Сохранить</Button>
             </div>
           </div>
         </DialogContent>

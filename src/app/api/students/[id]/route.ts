@@ -14,6 +14,7 @@ export async function PUT(
     const {
       lastName, firstName, patronymic, parentName, parentPhone, hourlyRate,
       tariffType, subscriptionRate, subscriptionLessons, enrollmentDate, notes, isBehavioral,
+      lastConsultationDate, consultationIntervalMonths,
     } = body;
 
     if (!lastName || !firstName) {
@@ -74,6 +75,12 @@ export async function PUT(
         enrollmentDate: enrollmentDate || null,
         notes: notes || null,
         isBehavioral: isBehavioral !== undefined ? Boolean(isBehavioral) : existing.isBehavioral,
+        // Консультации (фидбек Дархана 12.06): дата + интервал. Передача null
+        // допустима — сбрасывает значения, undefined — оставляет как было.
+        ...(lastConsultationDate !== undefined ? { lastConsultationDate: lastConsultationDate || null } : {}),
+        ...(consultationIntervalMonths !== undefined
+          ? { consultationIntervalMonths: consultationIntervalMonths ? Number(consultationIntervalMonths) : null }
+          : {}),
       },
     });
 
