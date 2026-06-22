@@ -974,7 +974,14 @@ export default function SchedulePage() {
                             <SelectContent>
                               {pairs.map((g) => {
                                 const label = g.displayName
-                                  ?? g.members.map((m) => `${m.student.firstName} ${m.student.lastName}`).join(" + ");
+                                  ?? g.members
+                                    .map((m) => {
+                                      const id = m.student.studentNumber != null
+                                        ? ` #${m.student.studentNumber.toString().padStart(3, "0")}`
+                                        : "";
+                                      return `${m.student.firstName} ${m.student.lastName}${id}`;
+                                    })
+                                    .join(" + ");
                                 return (
                                   <SelectItem key={g.id} value={g.id}>{label}</SelectItem>
                                 );
@@ -1709,6 +1716,11 @@ export default function SchedulePage() {
                       />
                       <span className="text-sm">
                         {m.student.lastName} {m.student.firstName}
+                        {m.student.studentNumber != null && (
+                          <span className="ml-2 font-mono text-gray-500">
+                            #{m.student.studentNumber.toString().padStart(3, "0")}
+                          </span>
+                        )}
                       </span>
                     </label>
                   );
