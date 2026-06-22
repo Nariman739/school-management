@@ -40,6 +40,7 @@ interface Teacher {
 
 interface Student {
   id: string;
+  studentNumber: number | null;
   lastName: string;
   firstName: string;
   patronymic: string | null;
@@ -71,7 +72,14 @@ function formatTeacherName(teacher: Teacher) {
 }
 
 function formatStudentName(student: Student) {
-  return `${student.lastName} ${student.firstName}`.trim();
+  // Дархан 15.06: «Адель 001 должна быть везде Адель 001 — единая форма» —
+  // показываем ID везде где есть, чтобы при выборе пары/группы не путаться
+  // между одноимёнными детьми.
+  const base = `${student.lastName} ${student.firstName}`.trim();
+  if (student.studentNumber != null) {
+    return `${base} #${student.studentNumber.toString().padStart(3, "0")}`;
+  }
+  return base;
 }
 
 function pairDisplayName(members: GroupMember[]): string {

@@ -52,6 +52,7 @@ interface StudentRecord {
   id: string;
   lastName: string;
   firstName: string;
+  studentNumber?: number | null;
 }
 
 interface GroupRecord {
@@ -356,6 +357,50 @@ export function matchStudentOrGroup(
   // "метод"
   if (normalized === "метод" || normalized.startsWith("метод")) {
     return { type: "method", label: "Методический час" };
+  }
+
+  // Дархан 15.06: в Google Sheets пишет «Мансура 009» / «Айсултан 010» —
+  // имя + studentNumber. Матчим по номеру, но С ВЕРИФИКАЦИЕЙ имени: если в
+  // ячейке указано имя и оно НЕ совпадает с найденным по ID — не матчим
+  // (защита от опечаток в номере). Дархан в превью сам выберет.
+  const numMatch = name.match(/\b(\d{1,3})\b/);
+  if (numMatch) {
+    const num = parseInt(numMatch[1], 10);
+    const byNumber = students.find((s) => s.studentNumber === num);
+    if (byNumber) {
+      // Имя в ячейке = всё кроме цифр и категории (А/И/ТЕХ/ЛОГ и т.п.)
+      const namePart = name
+        .replace(/\d+/g, "")
+        .replace(/\b(И|А|ТЕХ|ЛОГ|АФК|ДЗ|РЛ|МНО|каз|нов)\b/gi, "")
+        .toLowerCase()
+        .replace(/[^а-яёa-z]/gi, " ")
+        .trim();
+
+      if (!namePart) {
+        // В ячейке только число — доверяем номеру
+        return {
+          type: "student",
+          id: byNumber.id,
+          label: `${byNumber.lastName} ${byNumber.firstName}`,
+        };
+      }
+
+      const studentFullName = `${byNumber.lastName} ${byNumber.firstName}`.toLowerCase();
+      // Проверяем что любое слово из имени-в-ячейке совпадает с именем ученика
+      const nameWords = namePart.split(/\s+/).filter((w) => w.length >= 3);
+      const matches = nameWords.some((w) =>
+        studentFullName.includes(w) || w.includes(byNumber.firstName.toLowerCase()) || w.includes(byNumber.lastName.toLowerCase()),
+      );
+
+      if (matches || nameWords.length === 0) {
+        return {
+          type: "student",
+          id: byNumber.id,
+          label: `${byNumber.lastName} ${byNumber.firstName}`,
+        };
+      }
+      // Имя и номер не сходятся — пусть Дархан вручную в превью разрешит
+    }
   }
 
   // "гр М0", "гр МНО", "группа М1" → группа

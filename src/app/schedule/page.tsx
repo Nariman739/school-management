@@ -952,6 +952,7 @@ export default function SchedulePage() {
                         {students.map((s) => (
                           <SelectItem key={s.id} value={s.id}>
                             {s.lastName} {s.firstName}
+                            {s.studentNumber != null && ` #${s.studentNumber.toString().padStart(3, "0")}`}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1090,7 +1091,10 @@ export default function SchedulePage() {
                   {students
                     .filter((s) => s.id !== newPairStudent2)
                     .map((s) => (
-                      <SelectItem key={s.id} value={s.id}>{s.lastName} {s.firstName}</SelectItem>
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.lastName} {s.firstName}
+                        {s.studentNumber != null && ` #${s.studentNumber.toString().padStart(3, "0")}`}
+                      </SelectItem>
                     ))}
                 </SelectContent>
               </Select>
@@ -1103,7 +1107,10 @@ export default function SchedulePage() {
                   {students
                     .filter((s) => s.id !== newPairStudent1)
                     .map((s) => (
-                      <SelectItem key={s.id} value={s.id}>{s.lastName} {s.firstName}</SelectItem>
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.lastName} {s.firstName}
+                        {s.studentNumber != null && ` #${s.studentNumber.toString().padStart(3, "0")}`}
+                      </SelectItem>
                     ))}
                 </SelectContent>
               </Select>
@@ -1447,7 +1454,9 @@ export default function SchedulePage() {
                                               ...existing,
                                               studentId: sid,
                                               groupId: null,
-                                              entityLabel: s ? `${s.lastName} ${s.firstName}` : sid,
+                                              entityLabel: s
+                                                ? `${s.lastName} ${s.firstName}${s.studentNumber != null ? ` #${s.studentNumber.toString().padStart(3, "0")}` : ""}`
+                                                : sid,
                                             });
                                           } else if (val.startsWith("g:")) {
                                             const gid = val.slice(2);
@@ -1483,6 +1492,7 @@ export default function SchedulePage() {
                                     {students.map((s) => (
                                       <SelectItem key={s.id} value={`s:${s.id}`}>
                                         {s.lastName} {s.firstName}
+                                        {s.studentNumber != null && ` #${s.studentNumber.toString().padStart(3, "0")}`}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>

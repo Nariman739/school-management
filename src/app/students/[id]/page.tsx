@@ -41,6 +41,7 @@ interface StudentScheduleSlot {
 interface StudentCard {
   student: {
     id: string;
+    studentNumber: number | null;
     lastName: string;
     firstName: string;
     patronymic: string | null;
@@ -222,6 +223,11 @@ export default function StudentCardPage() {
         <div>
           <h1 className="text-2xl font-bold">
             {student.lastName} {student.firstName} {student.patronymic || ""}
+            {student.studentNumber != null && (
+              <span className="ml-3 text-xl font-mono text-gray-500">
+                #{student.studentNumber.toString().padStart(3, "0")}
+              </span>
+            )}
           </h1>
           <div className="mt-1 flex gap-2 text-sm text-gray-500">
             {student.parentName && <span>Родитель: {student.parentName}</span>}
@@ -261,7 +267,13 @@ export default function StudentCardPage() {
           <CardContent className="pt-4">
             <div className="text-sm text-gray-500">Тариф</div>
             <div className="text-lg font-bold">
-              {student.tariffType === "SUBSCRIPTION" ? `${student.subscriptionRate?.toLocaleString()} ₸/мес` : `${student.hourlyRate.toLocaleString()} ₸/час`}
+              {student.tariffType === "SUBSCRIPTION"
+                ? (student.subscriptionRate
+                    ? `${student.subscriptionRate.toLocaleString()} ₸/мес`
+                    : "—")
+                : (student.hourlyRate
+                    ? `${student.hourlyRate.toLocaleString()} ₸/час`
+                    : "—")}
             </div>
             <div className="text-xs text-gray-400">{student.tariffType === "SUBSCRIPTION" ? "Абонемент" : "Поурочно"}</div>
           </CardContent>
