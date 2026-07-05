@@ -242,7 +242,8 @@ export function matchTeacher(
   name: string,
   teachers: TeacherRecord[]
 ): TeacherRecord | null {
-  const normalized = name.toLowerCase().trim();
+  // Нормализуем множественные пробелы: «Алтынгуль  Кенжебек» → «Алтынгуль Кенжебек».
+  const normalized = name.toLowerCase().trim().replace(/\s+/g, " ");
   if (!normalized) return null;
 
   // Точное совпадение по фамилии
@@ -257,6 +258,13 @@ export function matchTeacher(
     return full === normalized || full.startsWith(normalized);
   });
   if (byFullName.length === 1) return byFullName[0];
+
+  // Имя + Фамилия (Дархан иногда пишет в этом порядке): «Алтынгуль Кенжебек»
+  const byReverseName = teachers.filter((t) => {
+    const rev = `${t.firstName} ${t.lastName}`.toLowerCase().trim();
+    return rev === normalized || rev.startsWith(normalized);
+  });
+  if (byReverseName.length === 1) return byReverseName[0];
 
   // Имя + Отчество (как в скриншоте: "Дарья Алексеевна")
   const byFirstPatronymic = teachers.filter((t) => {
@@ -359,47 +367,21 @@ export function matchStudentOrGroup(
     return { type: "method", label: "Методический час" };
   }
 
-  // Дархан 15.06: в Google Sheets пишет «Мансура 009» / «Айсултан 010» —
-  // имя + studentNumber. Матчим по номеру, но С ВЕРИФИКАЦИЕЙ имени: если в
-  // ячейке указано имя и оно НЕ совпадает с найденным по ID — не матчим
-  // (защита от опечаток в номере). Дархан в превью сам выберет.
+  // Дархан 15.06+: в Google Sheets везде проставляет ID («Мансура 009»).
+  // ID — единая точка истины (Дархан явно ставит номер, значит выбор осознанный).
+  // Приоритет матча: ЕСТЬ ЧИСЛО → берём ученика с этим studentNumber, имя не проверяем.
+  // Так парсер идеально ходит по шаблонному расписанию где Дархан просто везде
+  // указал номера. Если имя не сходится с найденным — это на совести автора файла.
   const numMatch = name.match(/\b(\d{1,3})\b/);
   if (numMatch) {
     const num = parseInt(numMatch[1], 10);
     const byNumber = students.find((s) => s.studentNumber === num);
     if (byNumber) {
-      // Имя в ячейке = всё кроме цифр и категории (А/И/ТЕХ/ЛОГ и т.п.)
-      const namePart = name
-        .replace(/\d+/g, "")
-        .replace(/\b(И|А|ТЕХ|ЛОГ|АФК|ДЗ|РЛ|МНО|каз|нов)\b/gi, "")
-        .toLowerCase()
-        .replace(/[^а-яёa-z]/gi, " ")
-        .trim();
-
-      if (!namePart) {
-        // В ячейке только число — доверяем номеру
-        return {
-          type: "student",
-          id: byNumber.id,
-          label: `${byNumber.lastName} ${byNumber.firstName}`,
-        };
-      }
-
-      const studentFullName = `${byNumber.lastName} ${byNumber.firstName}`.toLowerCase();
-      // Проверяем что любое слово из имени-в-ячейке совпадает с именем ученика
-      const nameWords = namePart.split(/\s+/).filter((w) => w.length >= 3);
-      const matches = nameWords.some((w) =>
-        studentFullName.includes(w) || w.includes(byNumber.firstName.toLowerCase()) || w.includes(byNumber.lastName.toLowerCase()),
-      );
-
-      if (matches || nameWords.length === 0) {
-        return {
-          type: "student",
-          id: byNumber.id,
-          label: `${byNumber.lastName} ${byNumber.firstName}`,
-        };
-      }
-      // Имя и номер не сходятся — пусть Дархан вручную в превью разрешит
+      return {
+        type: "student",
+        id: byNumber.id,
+        label: `${byNumber.lastName} ${byNumber.firstName}`,
+      };
     }
   }
 
@@ -687,7 +669,8 @@ function parseTeacherHeaderV2(header: string): {
   specialization: string | null;
   room: string | null;
 } {
-  let remaining = header.trim();
+  // Нормализуем пробелы: «Оксана Ивановна И +А» → «Оксана Ивановна И+А».
+  let remaining = header.trim().replace(/\s+\+\s*/g, "+");
 
   // Извлечь кабинет: "№1каб", "№11 каб", "№1 + 3 + 4 каб", "№ 5каб"
   let room: string | null = null;
@@ -697,13 +680,16 @@ function parseTeacherHeaderV2(header: string): {
     remaining = remaining.replace(roomMatch[0], "").trim();
   }
 
-  // Извлечь специализацию: "И", "А", "Тех", "И+А", "АФК", "ЛОГ"
-  const SPEC_PATTERN = /\s+(И\+А|И|А|ТЕХ|АФК|ЛОГ)\s*$/i;
+  // Извлечь специализацию: "И", "А", "Тех", "И+А", "АФК", "ЛОГ", "ИНФ", "РЛ", "ДЗ"
+  // Могут быть несколько подряд: «Дильназ Ж А» → сначала «А», потом «Ж» уже
+  // относится к фамилии. Отрезаем максимум 2 раза.
+  const SPEC_PATTERN = /\s+(И\+А|И|А|ТЕХ|АФК|ЛОГ|ИНФ|РЛ|ДЗ)\s*$/i;
   let specialization: string | null = null;
-  const specMatch = remaining.match(SPEC_PATTERN);
-  if (specMatch) {
-    specialization = specMatch[1];
-    remaining = remaining.slice(0, specMatch.index).trim();
+  for (let i = 0; i < 2; i++) {
+    const m = remaining.match(SPEC_PATTERN);
+    if (!m) break;
+    if (!specialization) specialization = m[1];
+    remaining = remaining.slice(0, m.index).trim();
   }
 
   return { displayName: remaining, specialization, room };
@@ -1174,8 +1160,10 @@ function matchSingleCellV2(
 ): MatchedRowV2 {
   const errors: string[] = [];
 
-  // Матчим учителя
-  const teacher = matchTeacher(cell.teacherName, teachers);
+  // Матчим учителя: сначала полное имя, потом сокращения («АртурВ», «НигматД», «Дильназ Ж»).
+  // Дархан в шаблоне часто пишет коротко — надо всех сматчить.
+  const teacher = matchTeacher(cell.teacherName, teachers)
+    ?? matchTeacherByAbbr(cell.teacherName, teachers);
   const teacherId = teacher?.id;
   const teacherLabel = teacher
     ? `${teacher.lastName} ${teacher.firstName}`
@@ -1396,7 +1384,17 @@ function matchTeacherByAbbr(
   abbr: string,
   teachers: TeacherRecord[],
 ): TeacherRecord | null {
-  const cleaned = abbr.trim();
+  // Отрезаем суффиксы категорий которые Дархан пишет после имени педагога:
+  // «РоманА ИНФ» / «Дильназ Ж А» / «Даяна О И» / «Дарья Владимеровна И».
+  // Могут быть несколько подряд («Дильназ Ж А» — сначала А (категория),
+  // потом Ж уже относится к фамилии — не отрезаем).
+  let cleaned = abbr.trim();
+  const SUFFIX_RX = /\s+(И\+А|И|А|ТЕХ|АФК|ЛОГ|ИНФ|РЛ|ДЗ)\s*$/i;
+  for (let i = 0; i < 3; i++) {
+    const m = cleaned.match(SUFFIX_RX);
+    if (!m) break;
+    cleaned = cleaned.slice(0, m.index).trim();
+  }
   if (!cleaned) return null;
 
   // 2-3 буквенная аббревиатура из заглавных: "РЖ" → Имя+Отчество, "ДАХ" → Имя+Отч+Фам
