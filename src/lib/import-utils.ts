@@ -819,7 +819,7 @@ const CATEGORY_SUFFIXES_V2: Record<string, string> = {
   дз: "ДЗ", рл: "РЛ", каз: "каз", мно: "МНО",
 };
 
-function parseCellValueV2(cell: string): ParsedCellV2 {
+export function parseCellValueV2(cell: string): ParsedCellV2 {
   // Нормализация: схлопываем множественные пробелы, убираем NBSP, убираем мусорные начала ("/")
   const trimmed = cell
     .replace(/ /g, " ")
