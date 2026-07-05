@@ -6,28 +6,36 @@ export async function GET() {
   try {
     const teachers = await prisma.teacher.findMany({
       where: { isActive: true },
-      orderBy: { lastName: "asc" },
+      orderBy: [{ teacherNumber: "asc" }, { lastName: "asc" }],
     });
 
-    const rows = teachers.map((t) => ({
-      lastName: t.lastName,
-      firstName: t.firstName,
-      patronymic: t.patronymic || "",
-      phone: t.phone || "",
-      specialization: t.specialization || "",
-      individualRate: t.individualRate,
-      groupRate: t.groupRate,
-      groupRate3: t.groupRate3,
-      groupRate5: t.groupRate5,
-      morningBonus: t.morningBonusRate,
-      eveningBonus: t.eveningBonusRate,
-      behavioralBonus: t.behavioralBonus,
-      isMethodist: t.isMethodist ? "Да" : "Нет",
-      methodistRate: t.methodistWeeklyRate,
-    }));
+    const rows = teachers.map((t) => {
+      const id = t.teacherNumber != null ? t.teacherNumber.toString().padStart(2, "0") : "";
+      const nameWithId = id ? `${t.firstName} ${id}` : t.firstName;
+      return {
+        teacherNumber: t.teacherNumber ?? "",
+        nameWithId,
+        lastName: t.lastName,
+        firstName: t.firstName,
+        patronymic: t.patronymic || "",
+        phone: t.phone || "",
+        specialization: t.specialization || "",
+        individualRate: t.individualRate,
+        groupRate: t.groupRate,
+        groupRate3: t.groupRate3,
+        groupRate5: t.groupRate5,
+        morningBonus: t.morningBonusRate,
+        eveningBonus: t.eveningBonusRate,
+        behavioralBonus: t.behavioralBonus,
+        isMethodist: t.isMethodist ? "Да" : "Нет",
+        methodistRate: t.methodistWeeklyRate,
+      };
+    });
 
     const buffer = generateExcel({
       columns: [
+        { header: "ID", key: "teacherNumber", width: 5 },
+        { header: "Для расписания", key: "nameWithId", width: 20 },
         { header: "Фамилия", key: "lastName", width: 20 },
         { header: "Имя", key: "firstName", width: 15 },
         { header: "Отчество", key: "patronymic", width: 20 },

@@ -14,23 +14,32 @@ export async function GET() {
           },
         },
       },
-      orderBy: { lastName: "asc" },
+      orderBy: [{ studentNumber: "asc" }, { lastName: "asc" }],
     });
 
-    const rows = students.map((s) => ({
-      lastName: s.lastName,
-      firstName: s.firstName,
-      patronymic: s.patronymic || "",
-      parentName: s.parentName || "",
-      parentPhone: s.parentPhone || "",
-      hourlyRate: s.hourlyRate,
-      tariffType: s.tariffType === "SUBSCRIPTION" ? "Абонемент" : "Поурочно",
-      groups: s.groupMembers.map((gm) => buildGroupDisplayName(gm.group)).join(", ") || "—",
-      behavioral: s.isBehavioral ? "Да" : "Нет",
-    }));
+    const rows = students.map((s) => {
+      const id = s.studentNumber != null ? s.studentNumber.toString().padStart(3, "0") : "";
+      // Готовая ячейка «Имя ID» для копирования в шаблон расписания (например «Мансура 079»)
+      const nameWithId = id ? `${s.firstName} ${id}` : s.firstName;
+      return {
+        studentNumber: s.studentNumber ?? "",
+        nameWithId,
+        lastName: s.lastName,
+        firstName: s.firstName,
+        patronymic: s.patronymic || "",
+        parentName: s.parentName || "",
+        parentPhone: s.parentPhone || "",
+        hourlyRate: s.hourlyRate,
+        tariffType: s.tariffType === "SUBSCRIPTION" ? "Абонемент" : "Поурочно",
+        groups: s.groupMembers.map((gm) => buildGroupDisplayName(gm.group)).join(", ") || "—",
+        behavioral: s.isBehavioral ? "Да" : "Нет",
+      };
+    });
 
     const buffer = generateExcel({
       columns: [
+        { header: "ID", key: "studentNumber", width: 6 },
+        { header: "Для расписания", key: "nameWithId", width: 20 },
         { header: "Фамилия", key: "lastName", width: 20 },
         { header: "Имя", key: "firstName", width: 15 },
         { header: "Отчество", key: "patronymic", width: 20 },
