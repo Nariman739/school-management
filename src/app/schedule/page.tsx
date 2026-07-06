@@ -204,6 +204,16 @@ export default function SchedulePage() {
   const [importWorkbookFile, setImportWorkbookFile] = useState<File | null>(null);
   // Ручное сопоставление: index строки → что выбрал пользователь
   const [resolutions, setResolutions] = useState<Map<number, RowResolution>>(new Map());
+  // Инлайн-создание ученика прямо из превью импорта. Хранит state для одной строки,
+  // потому что раскрыт максимум один инлайн-редактор за раз.
+  const [createStudentRow, setCreateStudentRow] = useState<number | null>(null);
+  const [csLastName, setCsLastName] = useState("");
+  const [csFirstName, setCsFirstName] = useState("");
+  const [csHourlyRate, setCsHourlyRate] = useState("4000");
+  const [csLessonType, setCsLessonType] = useState<"INDIVIDUAL" | "GROUP">("INDIVIDUAL");
+  const [csSaving, setCsSaving] = useState(false);
+  const [csError, setCsError] = useState("");
+  const [csToast, setCsToast] = useState<string | null>(null);
   // Диалог сохранения псевдонимов после импорта
   const [saveAliasesOpen, setSaveAliasesOpen] = useState(false);
   const [pendingAliases, setPendingAliases] = useState<PendingAlias[]>([]);
@@ -460,6 +470,131 @@ export default function SchedulePage() {
     setFreezeReason("");
   };
 
+  // Парсит содержимое ячейки, чтобы предложить ФИО для нового ученика.
+  // Логика: убираем известные хвостовые токены (категории, дни, «нов»),
+  // убираем цифры (это ID если Дархан уже пробовал), берём остаток.
+  // Если 2+ слова → первое = Фамилия, второе = Имя (у Дархана в списках именно так).
+  // Если 1 слово → это Имя, фамилия пустая (пользователь дозаполнит).
+  const guessStudentName = (cellValue: string): { lastName: string; firstName: string } => {
+    const CATS = new Set([
+      "и", "а", "тех", "сопр", "дз", "рл", "каз", "мно", "нов",
+      "лог", "логопед", "афк", "акад", "академ", "инт", "интенсив",
+    ]);
+    const DAYS = new Set(["пн", "вт", "ср", "чт", "пт", "сб", "вс"]);
+
+    // Убираем цифры (ID) и точки/тире/плюсы
+    let cleaned = cellValue
+      .replace(/\b\d{1,3}\b/g, " ")
+      .replace(/[.+\-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Разбираем на токены, отбрасываем известные хвосты
+    const tokens = cleaned.split(/\s+/).filter((t) => {
+      const low = t.toLowerCase();
+      if (CATS.has(low)) return false;
+      if (DAYS.has(low)) return false;
+      // Диапазон дней "пн-пт" уже разбит выше
+      return t.length > 0;
+    });
+
+    cleaned = tokens.join(" ");
+
+    if (!cleaned) return { lastName: "", firstName: "" };
+
+    const parts = cleaned.split(/\s+/);
+    if (parts.length >= 2) {
+      return { lastName: parts[0], firstName: parts.slice(1).join(" ") };
+    }
+    return { lastName: "", firstName: parts[0] };
+  };
+
+  const openCreateStudentInline = (rowIndex: number, cellValue: string) => {
+    const { lastName, firstName } = guessStudentName(cellValue);
+    setCsLastName(lastName);
+    setCsFirstName(firstName);
+    setCsHourlyRate("4000");
+    setCsLessonType("INDIVIDUAL");
+    setCsError("");
+    setCreateStudentRow(rowIndex);
+  };
+
+  const closeCreateStudentInline = () => {
+    setCreateStudentRow(null);
+    setCsError("");
+  };
+
+  const handleCreateStudentInline = async () => {
+    if (!importPreview || createStudentRow == null) return;
+    if (!csLastName.trim() || !csFirstName.trim()) {
+      setCsError("Фамилия и имя обязательны");
+      return;
+    }
+    setCsSaving(true);
+    setCsError("");
+    try {
+      const res = await fetch("/api/students", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lastName: csLastName.trim(),
+          firstName: csFirstName.trim(),
+          hourlyRate: csHourlyRate || "4000",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setCsError(data?.error || "Не удалось создать ученика");
+        return;
+      }
+      const newStudent = (await res.json()) as Student;
+
+      // Локально пополняем список учеников, чтобы новая запись сразу была видна
+      // в других выпадашках без перезагрузки страницы.
+      setStudents((prev) => [...prev, newStudent]);
+
+      // Собираем label как в основном пикере: «Фамилия Имя #NNN»
+      const idSuffix =
+        newStudent.studentNumber != null
+          ? ` #${newStudent.studentNumber.toString().padStart(3, "0")}`
+          : "";
+      const label = `${newStudent.lastName} ${newStudent.firstName}${idSuffix}`;
+
+      // Применяем разрешение ко всем строкам с тем же значением ячейки
+      const anchorRow = importPreview.matches[createStudentRow];
+      const sameCellValue = anchorRow?.cell.cellValue;
+      setResolutions((prev) => {
+        const next = new Map(prev);
+        importPreview.matches.forEach((match, idx) => {
+          const isSameCell = match.cell.cellValue === sameCellValue;
+          const hasStudentErr = match.errors.some(
+            (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена"),
+          );
+          if (isSameCell && hasStudentErr) {
+            const existing = next.get(idx) ?? {};
+            next.set(idx, {
+              ...existing,
+              studentId: newStudent.id,
+              groupId: null,
+              entityLabel: label,
+            });
+          }
+        });
+        return next;
+      });
+
+      setCsToast(`Создан #${(newStudent.studentNumber ?? 0).toString().padStart(3, "0")} ${newStudent.lastName} ${newStudent.firstName}`);
+      // Скрываем toast через 4 секунды
+      setTimeout(() => setCsToast(null), 4000);
+
+      closeCreateStudentInline();
+    } catch {
+      setCsError("Ошибка сети");
+    } finally {
+      setCsSaving(false);
+    }
+  };
+
   const openImportDialog = () => {
     setImportUrl("");
     setImportPreview(null);
@@ -469,6 +604,8 @@ export default function SchedulePage() {
     setImportSheets(null);
     setImportSelectedSheet("");
     setImportWorkbookFile(null);
+    setCreateStudentRow(null);
+    setCsToast(null);
     setImportDialogOpen(true);
   };
 
@@ -1280,6 +1417,11 @@ export default function SchedulePage() {
 
           {importStage === "preview" && importPreview && (
             <div className="space-y-4">
+              {csToast && (
+                <div className="rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+                  {csToast}
+                </div>
+              )}
               {/* Сводка */}
               <div className="flex flex-wrap gap-2">
                 {importPreview.detectedFormat === "v2-multiblock" ? (
@@ -1438,72 +1580,176 @@ export default function SchedulePage() {
                               r?.studentId || r?.groupId ? (
                                 <span className="text-yellow-700">{r.entityLabel}</span>
                               ) : (
-                                <Select
-                                  onValueChange={(val) => {
-                                    const sameCellValue = m.cell.cellValue;
-                                    setResolutions((prev) => {
-                                      const next = new Map(prev);
-                                      // Применяем ко ВСЕМ строкам с той же ячейкой
-                                      importPreview!.matches.forEach((match, idx) => {
-                                        if (
-                                          match.cell.cellValue === sameCellValue &&
-                                          match.errors.some(
-                                            (e) =>
-                                              e.startsWith("Не найден") ||
-                                              e.startsWith("Группа не найдена")
-                                          )
-                                        ) {
-                                          const existing = next.get(idx) ?? {};
-                                          if (val.startsWith("s:")) {
-                                            const sid = val.slice(2);
-                                            const s = students.find((s) => s.id === sid);
-                                            next.set(idx, {
-                                              ...existing,
-                                              studentId: sid,
-                                              groupId: null,
-                                              entityLabel: s
-                                                ? `${s.lastName} ${s.firstName}${s.studentNumber != null ? ` #${s.studentNumber.toString().padStart(3, "0")}` : ""}`
-                                                : sid,
-                                            });
-                                          } else if (val.startsWith("g:")) {
-                                            const gid = val.slice(2);
-                                            const g = groups.find((g) => g.id === gid);
-                                            next.set(idx, {
-                                              ...existing,
-                                              groupId: gid,
-                                              studentId: null,
-                                              entityLabel: g ? `гр ${g.name}` : gid,
-                                            });
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-1">
+                                    <Select
+                                      onValueChange={(val) => {
+                                        const sameCellValue = m.cell.cellValue;
+                                        setResolutions((prev) => {
+                                          const next = new Map(prev);
+                                          // Применяем ко ВСЕМ строкам с той же ячейкой
+                                          importPreview!.matches.forEach((match, idx) => {
+                                            if (
+                                              match.cell.cellValue === sameCellValue &&
+                                              match.errors.some(
+                                                (e) =>
+                                                  e.startsWith("Не найден") ||
+                                                  e.startsWith("Группа не найдена")
+                                              )
+                                            ) {
+                                              const existing = next.get(idx) ?? {};
+                                              if (val.startsWith("s:")) {
+                                                const sid = val.slice(2);
+                                                const s = students.find((s) => s.id === sid);
+                                                next.set(idx, {
+                                                  ...existing,
+                                                  studentId: sid,
+                                                  groupId: null,
+                                                  entityLabel: s
+                                                    ? `${s.lastName} ${s.firstName}${s.studentNumber != null ? ` #${s.studentNumber.toString().padStart(3, "0")}` : ""}`
+                                                    : sid,
+                                                });
+                                              } else if (val.startsWith("g:")) {
+                                                const gid = val.slice(2);
+                                                const g = groups.find((g) => g.id === gid);
+                                                next.set(idx, {
+                                                  ...existing,
+                                                  groupId: gid,
+                                                  studentId: null,
+                                                  entityLabel: g ? `гр ${g.name}` : gid,
+                                                });
+                                              }
+                                            }
+                                          });
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      <SelectTrigger className="h-6 w-44 text-xs">
+                                        <SelectValue placeholder="Кто это? ▾" />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="_" disabled>
+                                          — Группы —
+                                        </SelectItem>
+                                        {groups.map((g) => (
+                                          <SelectItem key={g.id} value={`g:${g.id}`}>
+                                            гр {g.name}
+                                          </SelectItem>
+                                        ))}
+                                        <SelectItem value="_2" disabled>
+                                          — Ученики —
+                                        </SelectItem>
+                                        {students.map((s) => (
+                                          <SelectItem key={s.id} value={`s:${s.id}`}>
+                                            {s.lastName} {s.firstName}
+                                            {s.studentNumber != null && ` #${s.studentNumber.toString().padStart(3, "0")}`}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    <button
+                                      type="button"
+                                      className="rounded border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+                                      onClick={() => openCreateStudentInline(i, m.cell.cellValue)}
+                                      title="Создать нового ученика по этой ячейке"
+                                    >
+                                      + Создать нового
+                                    </button>
+                                  </div>
+                                  {createStudentRow === i && (
+                                    <div className="mt-1 rounded border border-blue-200 bg-blue-50/50 p-2 space-y-2">
+                                      <div className="text-[11px] font-medium text-blue-900">
+                                        Создать нового ученика
+                                      </div>
+                                      {csError && (
+                                        <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-red-600">
+                                          {csError}
+                                        </div>
+                                      )}
+                                      <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                          <label className="mb-0.5 block text-[10px] text-gray-600">
+                                            Фамилия<span className="text-red-500">*</span>
+                                          </label>
+                                          <input
+                                            className="flex h-7 w-full rounded border border-input bg-white px-2 py-1 text-xs"
+                                            value={csLastName}
+                                            onChange={(e) => setCsLastName(e.target.value)}
+                                            placeholder="Иванов"
+                                            disabled={csSaving}
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="mb-0.5 block text-[10px] text-gray-600">
+                                            Имя<span className="text-red-500">*</span>
+                                          </label>
+                                          <input
+                                            className="flex h-7 w-full rounded border border-input bg-white px-2 py-1 text-xs"
+                                            value={csFirstName}
+                                            onChange={(e) => setCsFirstName(e.target.value)}
+                                            placeholder="Петр"
+                                            disabled={csSaving}
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="mb-0.5 block text-[10px] text-gray-600">
+                                            Ставка ₸/час
+                                          </label>
+                                          <input
+                                            type="number"
+                                            className="flex h-7 w-full rounded border border-input bg-white px-2 py-1 text-xs"
+                                            value={csHourlyRate}
+                                            onChange={(e) => setCsHourlyRate(e.target.value)}
+                                            placeholder="4000"
+                                            disabled={csSaving}
+                                          />
+                                        </div>
+                                        <div>
+                                          <label className="mb-0.5 block text-[10px] text-gray-600">
+                                            Тип занятия
+                                          </label>
+                                          <select
+                                            className="flex h-7 w-full rounded border border-input bg-white px-2 py-1 text-xs"
+                                            value={csLessonType}
+                                            onChange={(e) =>
+                                              setCsLessonType(e.target.value as "INDIVIDUAL" | "GROUP")
+                                            }
+                                            disabled={csSaving}
+                                          >
+                                            <option value="INDIVIDUAL">Индивид</option>
+                                            <option value="GROUP">Группа</option>
+                                          </select>
+                                        </div>
+                                      </div>
+                                      <div className="text-[10px] text-gray-500">
+                                        Из ячейки: <span className="font-mono">«{m.cell.cellValue}»</span>
+                                      </div>
+                                      <div className="flex justify-end gap-2">
+                                        <button
+                                          type="button"
+                                          className="rounded border px-2 py-1 text-[11px] hover:bg-gray-50"
+                                          onClick={closeCreateStudentInline}
+                                          disabled={csSaving}
+                                        >
+                                          Отмена
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="rounded bg-blue-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                                          onClick={handleCreateStudentInline}
+                                          disabled={
+                                            csSaving ||
+                                            !csLastName.trim() ||
+                                            !csFirstName.trim()
                                           }
-                                        }
-                                      });
-                                      return next;
-                                    });
-                                  }}
-                                >
-                                  <SelectTrigger className="h-6 w-44 text-xs">
-                                    <SelectValue placeholder="Кто это? ▾" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="_" disabled>
-                                      — Группы —
-                                    </SelectItem>
-                                    {groups.map((g) => (
-                                      <SelectItem key={g.id} value={`g:${g.id}`}>
-                                        гр {g.name}
-                                      </SelectItem>
-                                    ))}
-                                    <SelectItem value="_2" disabled>
-                                      — Ученики —
-                                    </SelectItem>
-                                    {students.map((s) => (
-                                      <SelectItem key={s.id} value={`s:${s.id}`}>
-                                        {s.lastName} {s.firstName}
-                                        {s.studentNumber != null && ` #${s.studentNumber.toString().padStart(3, "0")}`}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
+                                        >
+                                          {csSaving ? "Создание..." : "Создать"}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               )
                             ) : (
                               <span className="text-gray-400">—</span>

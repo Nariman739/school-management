@@ -38,6 +38,31 @@ interface StudentScheduleSlot {
   group: { id: string; name: string | null } | null;
 }
 
+interface WeeklyBillingSlot {
+  startTime: string;
+  endTime: string;
+  category: string | null;
+  price: number;
+  teacher: string;
+  teacherFull: string;
+}
+
+interface WeeklyBillingGroup {
+  dayGroup: string;
+  label: string;
+  daysCount: number;
+  daysActive: number[];
+  slots: WeeklyBillingSlot[];
+  daySum: number;
+  weekSum: number;
+}
+
+interface WeeklyBilling {
+  weekStart: string;
+  groups: WeeklyBillingGroup[];
+  weeklyTotal: number;
+}
+
 interface StudentCard {
   student: {
     id: string;
@@ -74,7 +99,7 @@ export default function StudentCardPage() {
   const [freezeForm, setFreezeForm] = useState({ startDate: "", endDate: "", reason: "", type: "OTHER" });
   const [recalcDialog, setRecalcDialog] = useState(false);
   const [recalcForm, setRecalcForm] = useState({ amount: "", reason: "", period: "" });
-  const [tab, setTab] = useState<"info" | "attendance" | "schedule" | "payments" | "freezes" | "crm">("info");
+  const [tab, setTab] = useState<"info" | "attendance" | "schedule" | "billing" | "payments" | "freezes" | "crm">("info");
   const [interactions, setInteractions] = useState<{ id: string; type: string; date: string; note: string; promisedPayDate: string | null; promisedAmount: number | null }[]>([]);
   const [crmDialog, setCrmDialog] = useState(false);
   const [crmForm, setCrmForm] = useState({ type: "CALL", date: "", note: "", promisedPayDate: "", promisedAmount: "" });
@@ -97,6 +122,24 @@ export default function StudentCardPage() {
       setScheduleLoading(false);
     }
   }, [id, weekStart]);
+
+  // Часы и оплата (недельный биллинг)
+  const [billingWeekStart, setBillingWeekStart] = useState<string>(() => getMonday(new Date()));
+  const [billing, setBilling] = useState<WeeklyBilling | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
+
+  const fetchBilling = useCallback(async () => {
+    if (!id) return;
+    setBillingLoading(true);
+    try {
+      const res = await fetch(`/api/students/${id}/weekly-billing?weekStart=${billingWeekStart}`);
+      if (res.ok) {
+        setBilling(await res.json());
+      }
+    } finally {
+      setBillingLoading(false);
+    }
+  }, [id, billingWeekStart]);
 
   // Консультации
   const [consultDialog, setConsultDialog] = useState(false);
@@ -155,6 +198,10 @@ export default function StudentCardPage() {
   useEffect(() => {
     if (tab === "schedule") fetchSchedule();
   }, [tab, fetchSchedule]);
+
+  useEffect(() => {
+    if (tab === "billing") fetchBilling();
+  }, [tab, fetchBilling]);
 
   const fetchCard = useCallback(async () => {
     const res = await fetch(`/api/students/${id}/card`);
@@ -309,6 +356,7 @@ export default function StudentCardPage() {
         {[
           { key: "info", label: "Информация" },
           { key: "schedule", label: "Расписание" },
+          { key: "billing", label: "Часы и оплата" },
           { key: "attendance", label: "Посещения" },
           { key: "payments", label: "Оплаты" },
           { key: "freezes", label: "Заморозки" },
@@ -534,6 +582,165 @@ export default function StudentCardPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {tab === "billing" && (
+        <div className="space-y-4">
+          {/* Заголовок с еженедельной суммой + переключалка */}
+          <Card>
+            <CardContent className="pt-6">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm text-gray-500">Еженедельная сумма</div>
+                  <div className="text-3xl font-bold text-gray-900">
+                    {(billing?.weeklyTotal ?? 0).toLocaleString()} ₸<span className="text-base font-normal text-gray-500">/нед</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setBillingWeekStart(addWeeks(billingWeekStart, -1))}
+                  >
+                    ←
+                  </Button>
+                  <span className="min-w-[140px] text-center text-sm font-medium">
+                    {formatWeekRange(billingWeekStart)}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setBillingWeekStart(addWeeks(billingWeekStart, 1))}
+                  >
+                    →
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Баланс месяца */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Баланс ({balance.month})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div>
+                  <div className="text-xs text-gray-500">Начислено</div>
+                  <div className="text-xl font-semibold text-gray-900">
+                    {balance.charged.toLocaleString()} ₸
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Оплачено</div>
+                  <div className="text-xl font-semibold text-gray-900">
+                    {balance.paid.toLocaleString()} ₸
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-gray-500">Баланс</div>
+                  {balance.debt > 0 ? (
+                    <div className="text-xl font-semibold text-red-600">
+                      −{balance.debt.toLocaleString()} ₸
+                      <span className="ml-2 text-xs font-normal">долг</span>
+                    </div>
+                  ) : balance.debt < 0 ? (
+                    <div className="text-xl font-semibold text-green-600">
+                      +{Math.abs(balance.debt).toLocaleString()} ₸
+                      <span className="ml-2 text-xs font-normal">переплата</span>
+                    </div>
+                  ) : (
+                    <div className="text-xl font-semibold text-gray-600">0 ₸</div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Блоки по группам дней */}
+          {billingLoading ? (
+            <div className="text-sm text-gray-400">Загрузка...</div>
+          ) : !billing || billing.groups.every((g) => g.slots.length === 0) ? (
+            <div className="rounded border border-dashed p-6 text-center text-sm text-gray-400">
+              Нет занятий на эту неделю
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              {billing.groups.map((g) => (
+                <Card key={g.dayGroup} className={g.slots.length === 0 ? "opacity-50" : ""}>
+                  <CardHeader>
+                    <CardTitle className="text-base">{g.label}</CardTitle>
+                    <div className="text-xs text-gray-500">
+                      {g.daysCount > 0
+                        ? `${g.daysCount} ${g.daysCount === 1 ? "день" : g.daysCount < 5 ? "дня" : "дней"} в неделю`
+                        : "Нет занятий"}
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    {g.slots.length === 0 ? (
+                      <div className="text-sm text-gray-400">—</div>
+                    ) : (
+                      <>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="w-[70px]">Время</TableHead>
+                              <TableHead className="w-[70px]">Кат.</TableHead>
+                              <TableHead>Педагог</TableHead>
+                              <TableHead className="text-right">Цена</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {g.slots.map((s, i) => (
+                              <TableRow key={`${g.dayGroup}-${i}`}>
+                                <TableCell className="font-mono text-xs">{s.startTime}</TableCell>
+                                <TableCell>
+                                  {s.category ? (
+                                    <Badge variant="secondary" className="font-normal">{s.category}</Badge>
+                                  ) : "—"}
+                                </TableCell>
+                                <TableCell className="text-sm" title={s.teacherFull}>{s.teacher || "—"}</TableCell>
+                                <TableCell className="text-right font-mono text-sm">
+                                  {s.price.toLocaleString()}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                        <div className="mt-3 border-t pt-3 text-sm">
+                          <div className="flex justify-between text-gray-600">
+                            <span>Сумма за день:</span>
+                            <span className="font-mono">{g.daySum.toLocaleString()} ₸</span>
+                          </div>
+                          <div className="flex justify-between text-gray-600">
+                            <span>× {g.daysCount} {g.daysCount === 1 ? "день" : g.daysCount < 5 ? "дня" : "дней"}</span>
+                            <span className="font-mono font-semibold text-gray-900">
+                              = {g.weekSum.toLocaleString()} ₸
+                            </span>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+
+          {billing && (
+            <Card className="border-blue-200 bg-blue-50/50">
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-between">
+                  <div className="text-base font-semibold text-gray-700">Итого за неделю</div>
+                  <div className="text-2xl font-bold text-blue-700">
+                    {billing.weeklyTotal.toLocaleString()} ₸
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       {tab === "attendance" && (
