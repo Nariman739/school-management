@@ -573,12 +573,13 @@ interface BlockTeacher {
 }
 
 interface ParsedCellV2 {
-  type: "student" | "group" | "method" | "multi_student" | "support_group" | "skip";
+  type: "student" | "group" | "method" | "multi_student" | "support_group" | "skip" | "internship";
   names: string[];
   groupName: string | null;
   category: string | null;
   dayOverride: number[] | null;
   raw: string;
+  mentor?: string | null; // наставник для type="internship"
 }
 
 // --- V2: Автодетекция формата ---
@@ -819,6 +820,27 @@ const CATEGORY_SUFFIXES_V2: Record<string, string> = {
   дз: "ДЗ", рл: "РЛ", каз: "каз", мно: "МНО",
 };
 
+// Стажировки. Расшифровка от Дархана (07.07): ячейка "стрж"/"стдм"/"стев" означает,
+// что педагог (в чьей колонке стоит ячейка) не ведёт ребёнка, а стажируется у наставника.
+// "ст" + инициалы наставника: рж=Ризат Жанатовна, дм=Динара Мейрамкызы, ев=Евгения Викторовна.
+// Слот создаётся без ученика (как «метод») → в оплату педагога не попадает.
+// Список точечный, чтобы не спутать со студентами (напр. «Стас»). Новые — дописать сюда.
+const INTERNSHIP_MENTORS: Record<string, string> = {
+  стрж: "Ризат Жанатовна",
+  стдм: "Динара Мейрамкызы",
+  стев: "Евгения Викторовна",
+};
+
+// Распознаёт стажировку по ячейке. Берёт первый токен (на случай хвостов вроде
+// «стрж пн ср»), нормализует (нижний регистр, без точек). null — не стажировка.
+function detectInternship(raw: string): { mentor: string } | null {
+  const firstToken = raw.trim().split(/\s+/)[0]?.toLowerCase().replace(/\./g, "") ?? "";
+  if (firstToken && INTERNSHIP_MENTORS[firstToken]) {
+    return { mentor: INTERNSHIP_MENTORS[firstToken] };
+  }
+  return null;
+}
+
 export function parseCellValueV2(cell: string): ParsedCellV2 {
   // Нормализация: схлопываем множественные пробелы, убираем NBSP, убираем мусорные начала ("/")
   const trimmed = cell
@@ -847,6 +869,20 @@ export function parseCellValueV2(cell: string): ParsedCellV2 {
   // "метод", "метод1" → методический час
   if (/^метод\d*$/i.test(lower)) {
     return { type: "method", names: [], groupName: null, category: "Метод", dayOverride: null, raw: trimmed };
+  }
+
+  // "стрж"/"стдм"/"стев" → стажировка педагога у наставника (без ученика).
+  const internship = detectInternship(trimmed);
+  if (internship) {
+    return {
+      type: "internship",
+      names: [],
+      groupName: null,
+      category: "Стажировка",
+      dayOverride: null,
+      raw: trimmed,
+      mentor: internship.mentor,
+    };
   }
 
   // Сопровождение группы: "сопр грМ0", "сопргрМНО ОНР", "сорп гр..." (опечатка)
@@ -1188,6 +1224,13 @@ function matchSingleCellV2(
     lessonType = "INDIVIDUAL";
     studentOrGroupLabel = "Методический час";
     lessonCategory = "Метод";
+  } else if (parsed.type === "internship") {
+    // Стажировка: слот-метка без ученика (как метод) → в оплату не идёт.
+    lessonType = "INDIVIDUAL";
+    studentOrGroupLabel = parsed.mentor
+      ? `Стажировка у ${parsed.mentor}`
+      : "Стажировка";
+    lessonCategory = "Стажировка";
   } else if (parsed.type === "group" || parsed.type === "support_group") {
     const group = matchGroupFuzzy(parsed.groupName!, groups);
     if (group) {

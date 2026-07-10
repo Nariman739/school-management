@@ -107,6 +107,7 @@ interface ScheduleSlot {
 function getCellStyle(slot: ScheduleSlot): string {
   const cat = slot.lessonCategory;
   if (cat === "Метод") return "bg-gray-200 text-gray-700";
+  if (cat === "Стажировка") return "bg-indigo-100 text-indigo-800";
   if (cat === "СОПР") return "bg-purple-100 text-purple-800";
   if (slot.lessonType === "GROUP") return "bg-green-100 text-green-800";
   if (cat === "И") return "bg-blue-100 text-blue-800";
@@ -135,6 +136,7 @@ function studentDisplay(s: { firstName: string; lastName: string; studentNumber?
 
 function getSlotLabel(slot: ScheduleSlot): string {
   if (slot.lessonCategory === "Метод") return "метод";
+  if (slot.lessonCategory === "Стажировка") return "стаж.";
   if (slot.lessonType === "GROUP" && slot.group) {
     if (slot.group.groupType === "PAIR" || !slot.group.name) {
       const members = slot.group.members?.map((m) => studentDisplay(m.student)).join(" + ");
@@ -695,6 +697,7 @@ export default function SchedulePage() {
         teacherId: string;
         studentId?: string | null;
         groupId?: string | null;
+        pairStudentIds?: string[]; // для пар "X+Y" — confirm соберёт/найдёт Group(PAIR)
         startTime: string;
         dayGroup: "mwf" | "tt" | "sat";
         lessonType: string;
@@ -769,6 +772,11 @@ export default function SchedulePage() {
           teacherId,
           studentId,
           groupId,
+          // Пара "X+Y": оба ученика распознаны парсером — отдаём id, confirm создаст Group(PAIR).
+          pairStudentIds:
+            m.lessonType === "PAIR" && m.pairStudentIds?.length === 2
+              ? m.pairStudentIds
+              : undefined,
           startTime: m.startTime!,
           // v3-saturday: парсер выставляет dayGroup="mwf" как placeholder, но семантически
           // это суббота. Переопределяем здесь.
