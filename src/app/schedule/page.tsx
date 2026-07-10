@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -26,7 +26,7 @@ import {
   formatWeekRange,
   getEndTime,
 } from "@/lib/schedule-utils";
-import type { ImportPreviewV2, MatchedRowV2 } from "@/lib/import-utils";
+import { suggestStudentMatches, type ImportPreviewV2, type MatchedRowV2, type StudentSuggestion } from "@/lib/import-utils";
 
 // Ручное сопоставление строк импорта (когда fuzzy match не нашёл)
 interface RowResolution {
@@ -843,6 +843,93 @@ export default function SchedulePage() {
     setPendingAliases([]);
   };
 
+  // Подсказки «похоже это он?» по каждой нераспознанной ячейке. Считаем один раз
+  // на превью+список учеников (fuzzy по всем 100+ ученикам — тяжело для каждого рендера).
+  const suggestionsByCell = useMemo(() => {
+    const map = new Map<string, StudentSuggestion[]>();
+    if (!importPreview) return map;
+    for (const m of importPreview.matches) {
+      if (map.has(m.cell.cellValue)) continue;
+      const hasStudentErr = m.errors.some(
+        (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена")
+      );
+      if (!hasStudentErr) continue;
+      map.set(m.cell.cellValue, suggestStudentMatches(m.cell.cellValue, students, 3));
+    }
+    return map;
+  }, [importPreview, students]);
+
+  // Разрешить нераспознанную ячейку: выбор применяется ко ВСЕМ строкам с тем же текстом.
+  const resolveCellValue = useCallback(
+    (
+      cellValue: string,
+      pick: { studentId: string; label: string } | { groupId: string; label: string },
+    ) => {
+      if (!importPreview) return;
+      setResolutions((prev) => {
+        const next = new Map(prev);
+        importPreview.matches.forEach((match, idx) => {
+          if (
+            match.cell.cellValue === cellValue &&
+            match.errors.some(
+              (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена")
+            )
+          ) {
+            const existing = next.get(idx) ?? {};
+            if ("studentId" in pick) {
+              next.set(idx, { ...existing, studentId: pick.studentId, groupId: null, entityLabel: pick.label });
+            } else {
+              next.set(idx, { ...existing, groupId: pick.groupId, studentId: null, entityLabel: pick.label });
+            }
+          }
+        });
+        return next;
+      });
+    },
+    [importPreview],
+  );
+
+  // Сбросить разрешение для ячейки (кнопка ✕ в чеклисте).
+  const clearCellValue = useCallback(
+    (cellValue: string) => {
+      if (!importPreview) return;
+      setResolutions((prev) => {
+        const next = new Map(prev);
+        importPreview.matches.forEach((match, idx) => {
+          if (match.cell.cellValue === cellValue && next.has(idx)) {
+            const ex = next.get(idx)!;
+            // убираем только выбор ученика/группы, оставляем возможный выбор учителя
+            const { studentId: _s, groupId: _g, entityLabel: _l, ...rest } = ex;
+            next.set(idx, rest);
+          }
+        });
+        return next;
+      });
+    },
+    [importPreview],
+  );
+
+  // Уникальные нераспознанные ячейки (ученик/группа) для панели-чеклиста.
+  const unresolvedCells = useMemo(() => {
+    if (!importPreview) return [] as { cellValue: string; rowIndexes: number[] }[];
+    const map = new Map<string, number[]>();
+    importPreview.matches.forEach((m, i) => {
+      const hasStudentErr = m.errors.some(
+        (e) => e.startsWith("Не найден") || e.startsWith("Группа не найдена")
+      );
+      if (!hasStudentErr) return;
+      if (!map.has(m.cell.cellValue)) map.set(m.cell.cellValue, []);
+      map.get(m.cell.cellValue)!.push(i);
+    });
+    return [...map.entries()].map(([cellValue, rowIndexes]) => ({ cellValue, rowIndexes }));
+  }, [importPreview]);
+
+  const studentDatalistLabel = useCallback(
+    (s: Student) =>
+      `${s.lastName} ${s.firstName}${s.studentNumber != null ? ` #${s.studentNumber.toString().padStart(3, "0")}` : ""}`,
+    [],
+  );
+
   // Сколько строк будет импортировано (автоматически + вручную)
   const resolvedManuallyCount = importPreview
     ? [...resolutions.keys()].filter((i) => {
@@ -1463,9 +1550,103 @@ export default function SchedulePage() {
 
               {importPreview.errorRows > 0 && (
                 <div className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-700">
-                  Для строк с ошибками выберите кто это в колонке <strong>«Выбрать»</strong>. После импорта система запомнит сопоставления.
+                  Разберите нераспознанные в панели ниже: тапните похожего ученика, найдите поиском или создайте нового. Выбор применится ко всем таким же ячейкам, а после импорта система его запомнит.
                 </div>
               )}
+
+              {/* Панель-чеклист нераспознанных ячеек */}
+              {unresolvedCells.length > 0 && (() => {
+                const resolvedCount = unresolvedCells.filter(({ rowIndexes }) => {
+                  const r = resolutions.get(rowIndexes[0]);
+                  return r && (!!r.studentId || !!r.groupId);
+                }).length;
+                return (
+                  <div className="rounded border border-amber-300 bg-amber-50/60 p-3">
+                    <div className="mb-2 text-sm font-semibold text-amber-900">
+                      Не распознано — разберите: {resolvedCount} из {unresolvedCells.length} ✓
+                    </div>
+                    <div className="max-h-60 space-y-1.5 overflow-auto">
+                      {unresolvedCells.map(({ cellValue, rowIndexes }) => {
+                        const r = resolutions.get(rowIndexes[0]);
+                        const done = !!r && (!!r.studentId || !!r.groupId);
+                        const sugg = done ? [] : suggestionsByCell.get(cellValue) ?? [];
+                        return (
+                          <div
+                            key={cellValue}
+                            className="flex flex-wrap items-center gap-1.5 rounded bg-white/70 px-2 py-1"
+                          >
+                            <span className={done ? "text-green-600" : "text-amber-500"}>
+                              {done ? "✓" : "○"}
+                            </span>
+                            <span
+                              className="min-w-[100px] max-w-[140px] truncate font-mono text-xs"
+                              title={cellValue}
+                            >
+                              «{cellValue}»
+                            </span>
+                            {rowIndexes.length > 1 && (
+                              <span className="text-[10px] text-gray-400">×{rowIndexes.length}</span>
+                            )}
+                            {done ? (
+                              <span className="text-xs text-green-700">
+                                → {r!.entityLabel}
+                                <button
+                                  type="button"
+                                  className="ml-1.5 text-gray-400 hover:text-red-500"
+                                  onClick={() => clearCellValue(cellValue)}
+                                  title="Сбросить выбор"
+                                >
+                                  ✕
+                                </button>
+                              </span>
+                            ) : (
+                              <>
+                                {sugg.map((s) => (
+                                  <button
+                                    key={s.id}
+                                    type="button"
+                                    className="rounded border border-green-300 bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-800 hover:bg-green-100"
+                                    onClick={() => resolveCellValue(cellValue, { studentId: s.id, label: s.label })}
+                                    title="Это он — подставить"
+                                  >
+                                    {s.label}
+                                  </button>
+                                ))}
+                                <input
+                                  list="all-students-datalist"
+                                  placeholder="поиск…"
+                                  className="h-6 w-32 rounded border border-input bg-white px-1.5 text-[11px]"
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const s = students.find((st) => studentDatalistLabel(st) === val);
+                                    if (s) {
+                                      resolveCellValue(cellValue, { studentId: s.id, label: studentDatalistLabel(s) });
+                                      e.target.value = "";
+                                    }
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  className="rounded border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 hover:bg-blue-100"
+                                  onClick={() => openCreateStudentInline(rowIndexes[0], cellValue)}
+                                  title="Создать нового ученика (форма появится в таблице ниже)"
+                                >
+                                  + Создать
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <datalist id="all-students-datalist">
+                      {students.map((s) => (
+                        <option key={s.id} value={studentDatalistLabel(s)} />
+                      ))}
+                    </datalist>
+                  </div>
+                );
+              })()}
 
               {/* Таблица превью */}
               <div className="max-h-[420px] overflow-auto rounded border">
@@ -1589,6 +1770,21 @@ export default function SchedulePage() {
                                 <span className="text-yellow-700">{r.entityLabel}</span>
                               ) : (
                                 <div className="space-y-1">
+                                  {(suggestionsByCell.get(m.cell.cellValue) ?? []).length > 0 && (
+                                    <div className="flex flex-wrap gap-1">
+                                      {(suggestionsByCell.get(m.cell.cellValue) ?? []).map((s) => (
+                                        <button
+                                          key={s.id}
+                                          type="button"
+                                          className="rounded border border-green-300 bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-800 hover:bg-green-100"
+                                          onClick={() => resolveCellValue(m.cell.cellValue, { studentId: s.id, label: s.label })}
+                                          title="Это он — подставить"
+                                        >
+                                          {s.label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
                                   <div className="flex items-center gap-1">
                                     <Select
                                       onValueChange={(val) => {

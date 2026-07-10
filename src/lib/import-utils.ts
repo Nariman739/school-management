@@ -354,6 +354,74 @@ function levenshtein(a: string, b: string): number {
   return prev[n];
 }
 
+// --- Подсказки «похоже это он?» для нераспознанных ячеек ---
+
+export interface StudentSuggestion {
+  id: string;
+  label: string;
+  distance: number;
+}
+
+// Очищает ячейку до «ядра» имени: убирает хвостовые дни/категории/точки,
+// из пары "X+Y" берёт первую часть. Для похожести это достаточно.
+function coreNameForSuggest(raw: string): string {
+  let s = raw.replace(/\./g, " ").replace(/\s+/g, " ").trim();
+  if (s.includes("+")) s = s.split("+")[0].trim();
+  // хвостовые дни и категории (можно несколько подряд)
+  for (let i = 0; i < 4; i++) {
+    const next = s.replace(
+      /\s+(пн|вт|ср|чт|пт|и|а|тех|сопр|дз|рл|каз|мно|нов|лог|афк|акад|инт)$/i,
+      "",
+    ).trim();
+    if (next === s) break;
+    s = next;
+  }
+  return s;
+}
+
+// Возвращает до `limit` наиболее похожих учеников на текст ячейки, отсортированных
+// по близости. Использует Левенштейна по Имя/Фамилия/Имя+Фамилия/Фамилия+Имя с
+// бонусом за префиксное совпадение. Порог зависит от длины — короткие имена строже.
+export function suggestStudentMatches(
+  rawName: string,
+  students: StudentRecord[],
+  limit = 3,
+): StudentSuggestion[] {
+  const compact = (s: string) => s.replace(/\s+/g, "").toLowerCase();
+  const target = compact(coreNameForSuggest(rawName));
+  if (!target) return [];
+
+  const scored = students.map((s) => {
+    const fn = s.firstName.toLowerCase();
+    const ln = s.lastName.toLowerCase();
+    const cands = [fn, ln, compact(`${fn}${ln}`), compact(`${ln}${fn}`)];
+    let best = Infinity;
+    for (const c of cands) {
+      if (!c) continue;
+      let d = levenshtein(target, c);
+      // Префикс: «Асан» ↔ «Асанали» — считаем как разницу длин, а не полную дистанцию.
+      if (c.startsWith(target) || target.startsWith(c)) {
+        d = Math.min(d, Math.abs(c.length - target.length));
+      }
+      best = Math.min(best, d);
+    }
+    return { s, distance: best };
+  });
+
+  const threshold = Math.max(2, Math.ceil(target.length * 0.45));
+  return scored
+    .filter((x) => x.distance <= threshold)
+    .sort((a, b) => a.distance - b.distance)
+    .slice(0, limit)
+    .map((x) => ({
+      id: x.s.id,
+      label: `${x.s.lastName} ${x.s.firstName}${
+        x.s.studentNumber != null ? ` #${x.s.studentNumber.toString().padStart(3, "0")}` : ""
+      }`,
+      distance: x.distance,
+    }));
+}
+
 export function matchStudentOrGroup(
   name: string,
   students: StudentRecord[],
