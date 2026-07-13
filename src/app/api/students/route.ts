@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { suggestStudentMatches } from "@/lib/import-utils";
 
 // GET /api/students — list all active students
 export async function GET() {
@@ -63,6 +64,30 @@ export async function POST(request: NextRequest) {
         { error: "Фамилия и имя обязательны для заполнения" },
         { status: 400 }
       );
+    }
+
+    // Дедуп-предохранитель: не даём молча плодить копии уже существующих учеников
+    // (Дархан так наплодил дубли Алинур/Айдана/…). Если есть очень близкий активный
+    // ученик и клиент не подтвердил force — возвращаем кандидатов, UI переспросит.
+    const force = body?.force === true;
+    if (!force) {
+      const active = await prisma.student.findMany({
+        where: { isActive: true },
+        select: { id: true, lastName: true, firstName: true, studentNumber: true },
+      });
+      const nearDupes = suggestStudentMatches(`${lastName} ${firstName}`, active, 5).filter(
+        (s) => s.distance <= 2,
+      );
+      if (nearDupes.length > 0) {
+        return NextResponse.json(
+          {
+            error: "Возможно, такой ученик уже есть",
+            code: "POSSIBLE_DUPLICATE",
+            candidates: nearDupes.map((s) => ({ id: s.id, label: s.label })),
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const studentNumber = await nextStudentNumber();

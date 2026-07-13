@@ -191,11 +191,30 @@ export default function StudentsPage() {
         if (!r.ok) throw new Error((await r.json()).error || "Не удалось сохранить");
         studentId = editingStudent.id;
       } else {
-        const r = await fetch("/api/students", {
+        let r = await fetch("/api/students", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(basePayload),
         });
+        // Дедуп-предохранитель: сервер нашёл похожего — переспрашиваем и, если надо, форсим
+        if (r.status === 409) {
+          const data = await r.json();
+          if (data.code === "POSSIBLE_DUPLICATE") {
+            const names = (data.candidates ?? []).map((c: { label: string }) => c.label).join(", ");
+            const ok = window.confirm(
+              `Возможно, такой ученик уже есть:\n${names}\n\nВсё равно создать нового?`,
+            );
+            if (!ok) {
+              setSaving(false);
+              return;
+            }
+            r = await fetch("/api/students", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...basePayload, force: true }),
+            });
+          }
+        }
         if (!r.ok) throw new Error((await r.json()).error || "Не удалось создать");
         const created = await r.json();
         studentId = created.id;

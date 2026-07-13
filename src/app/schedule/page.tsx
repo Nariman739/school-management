@@ -542,6 +542,8 @@ export default function SchedulePage() {
           lastName: csLastName.trim(),
           firstName: csFirstName.trim(),
           hourlyRate: csHourlyRate || "4000",
+          // В импорте похожие уже показаны чипами-подсказками — форсим создание без повторного вопроса
+          force: true,
         }),
       });
       if (!res.ok) {
