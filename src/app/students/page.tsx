@@ -54,6 +54,7 @@ interface StudentPrice {
 }
 
 interface StudentFormData {
+  studentNumber: string; // № ученика (редактируется только при изменении)
   lastName: string;
   firstName: string;
   patronymic: string;
@@ -63,6 +64,7 @@ interface StudentFormData {
 }
 
 const emptyForm: StudentFormData = {
+  studentNumber: "",
   lastName: "",
   firstName: "",
   patronymic: "",
@@ -140,6 +142,7 @@ export default function StudentsPage() {
       pricesMap[svc.id] = found ? String(found.price) : "";
     }
     setFormData({
+      studentNumber: student.studentNumber != null ? String(student.studentNumber) : "",
       lastName: student.lastName,
       firstName: student.firstName,
       patronymic: student.patronymic ?? "",
@@ -186,7 +189,7 @@ export default function StudentsPage() {
         const r = await fetch(`/api/students/${editingStudent.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(basePayload),
+          body: JSON.stringify({ ...basePayload, studentNumber: formData.studentNumber.trim() }),
         });
         if (!r.ok) throw new Error((await r.json()).error || "Не удалось сохранить");
         studentId = editingStudent.id;
@@ -413,6 +416,24 @@ export default function StudentsPage() {
               {error && dialogOpen && (
                 <div className="bg-destructive/10 text-destructive border border-destructive/20 rounded-md p-3 text-sm">
                   {error}
+                </div>
+              )}
+
+              {editingStudent && (
+                <div className="grid gap-2">
+                  <Label htmlFor="studentNumber">№ ученика</Label>
+                  <Input
+                    id="studentNumber"
+                    type="number"
+                    inputMode="numeric"
+                    value={formData.studentNumber}
+                    onChange={(e) => handleInputChange("studentNumber", e.target.value)}
+                    placeholder="123"
+                    className="w-32"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Можно менять под свою нумерацию. Если номер занят другим — система предупредит.
+                  </p>
                 </div>
               )}
 

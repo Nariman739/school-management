@@ -14,7 +14,7 @@ export async function PUT(
     const {
       lastName, firstName, patronymic, parentName, parentPhone, hourlyRate,
       tariffType, subscriptionRate, subscriptionLessons, enrollmentDate, notes, isBehavioral,
-      lastConsultationDate, consultationIntervalMonths,
+      lastConsultationDate, consultationIntervalMonths, studentNumber,
     } = body;
 
     if (!lastName || !firstName) {
@@ -30,6 +30,35 @@ export async function PUT(
         { error: "Ученик не найден" },
         { status: 404 }
       );
+    }
+
+    // Ручное редактирование номера (Дархан ведёт свою нумерацию под Excel).
+    // undefined — не трогаем; "" / null — сбрасываем; число — ставим, но проверяем,
+    // что номер не занят другим учеником (иначе будет каша в списке).
+    let newStudentNumber: number | null | undefined = undefined;
+    if (studentNumber !== undefined) {
+      if (studentNumber === null || String(studentNumber).trim() === "") {
+        newStudentNumber = null;
+      } else {
+        const n = parseInt(String(studentNumber), 10);
+        if (!Number.isInteger(n) || n <= 0) {
+          return NextResponse.json({ error: "Номер должен быть положительным числом" }, { status: 400 });
+        }
+        if (n !== existing.studentNumber) {
+          const taken = await prisma.student.findFirst({ where: { studentNumber: n, id: { not: id } } });
+          if (taken) {
+            return NextResponse.json(
+              {
+                error: `Номер ${n} уже занят: ${taken.lastName} ${taken.firstName}`,
+                code: "NUMBER_TAKEN",
+                takenBy: { id: taken.id, label: `${taken.lastName} ${taken.firstName}` },
+              },
+              { status: 409 },
+            );
+          }
+        }
+        newStudentNumber = n;
+      }
     }
 
     const newHourlyRate = hourlyRate ? parseInt(String(hourlyRate), 10) : 0;
@@ -81,6 +110,7 @@ export async function PUT(
         ...(consultationIntervalMonths !== undefined
           ? { consultationIntervalMonths: consultationIntervalMonths ? Number(consultationIntervalMonths) : null }
           : {}),
+        ...(newStudentNumber !== undefined ? { studentNumber: newStudentNumber } : {}),
       },
     });
 
