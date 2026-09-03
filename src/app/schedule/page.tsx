@@ -155,6 +155,10 @@ export default function SchedulePage() {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date()));
   const [activeDayGroup, setActiveDayGroup] = useState("mwf");
   const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [renameTeacher, setRenameTeacher] = useState<Teacher | null>(null);
+  const [renameForm, setRenameForm] = useState({ lastName: "", firstName: "", patronymic: "" });
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [renameError, setRenameError] = useState("");
   const [students, setStudents] = useState<Student[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
@@ -268,6 +272,61 @@ export default function SchedulePage() {
     return slots.find(
       (s) => s.teacherId === teacherId && s.startTime === time
     );
+  };
+
+  const teacherFullName = (teacher: Teacher) =>
+    [teacher.lastName, teacher.firstName, teacher.patronymic].filter(Boolean).join(" ");
+
+  const openRenameDialog = (teacher: Teacher) => {
+    setRenameTeacher(teacher);
+    setRenameForm({
+      lastName: teacher.lastName,
+      firstName: teacher.firstName,
+      patronymic: teacher.patronymic ?? "",
+    });
+    setRenameError("");
+  };
+
+  const handleRenameTeacher = async () => {
+    if (!renameTeacher) return;
+    const lastName = renameForm.lastName.trim();
+    const firstName = renameForm.firstName.trim();
+    if (!lastName || !firstName) {
+      setRenameError("Фамилия и имя обязательны");
+      return;
+    }
+
+    setRenameSaving(true);
+    setRenameError("");
+    try {
+      // Шлём только ФИО — остальные поля (ставки, кабинет) бэкенд не трогает
+      const res = await fetch(`/api/teachers/${renameTeacher.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lastName,
+          firstName,
+          patronymic: renameForm.patronymic.trim() || null,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setRenameError(data.error ?? "Не удалось сохранить ФИО");
+        return;
+      }
+      setTeachers((prev) =>
+        prev.map((t) =>
+          t.id === renameTeacher.id
+            ? { ...t, lastName, firstName, patronymic: renameForm.patronymic.trim() || null }
+            : t,
+        ),
+      );
+      setRenameTeacher(null);
+    } catch {
+      setRenameError("Не удалось сохранить ФИО");
+    } finally {
+      setRenameSaving(false);
+    }
   };
 
   const openAddDialog = (teacherId: string, time: string) => {
@@ -1027,12 +1086,17 @@ export default function SchedulePage() {
                     className="border-b border-r bg-gray-50 p-2 text-center text-xs font-medium text-gray-700"
                     style={{ minWidth: 110 }}
                   >
-                    <div>
-                      {teacher.firstName}{" "}
-                      {teacher.teacherNumber != null
-                        ? teacher.teacherNumber.toString().padStart(2, "0")
-                        : `${teacher.lastName[0] ?? ""}.`}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openRenameDialog(teacher)}
+                      title={`${teacherFullName(teacher)} — нажмите, чтобы изменить ФИО`}
+                      className="w-full rounded px-1 py-0.5 text-center hover:bg-gray-100"
+                    >
+                      <div>{teacher.firstName}</div>
+                      <div className="text-[11px] font-normal text-gray-500">
+                        {teacher.lastName}
+                      </div>
+                    </button>
                     {teacher.room && (
                       <div className="text-[10px] font-normal text-gray-400">
                         {teacher.room}
@@ -2194,6 +2258,79 @@ export default function SchedulePage() {
               </Button>
               <Button onClick={handleSaveAttendees} disabled={attendeesSaving}>
                 {attendeesSaving ? "Сохранение..." : "Сохранить"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Правка ФИО педагога прямо из шапки колонки */}
+      <Dialog
+        open={renameTeacher !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenameTeacher(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>ФИО педагога</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label className="text-sm font-medium" htmlFor="rename-lastName">
+                Фамилия
+              </label>
+              <input
+                id="rename-lastName"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                value={renameForm.lastName}
+                onChange={(e) =>
+                  setRenameForm((f) => ({ ...f, lastName: e.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium" htmlFor="rename-firstName">
+                Имя
+              </label>
+              <input
+                id="rename-firstName"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                value={renameForm.firstName}
+                onChange={(e) =>
+                  setRenameForm((f) => ({ ...f, firstName: e.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-sm font-medium" htmlFor="rename-patronymic">
+                Отчество
+              </label>
+              <input
+                id="rename-patronymic"
+                className="w-full rounded-md border px-3 py-2 text-sm"
+                value={renameForm.patronymic}
+                onChange={(e) =>
+                  setRenameForm((f) => ({ ...f, patronymic: e.target.value }))
+                }
+              />
+            </div>
+            {renameError && (
+              <p className="text-sm text-destructive">{renameError}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Меняется только ФИО — ставки, кабинет и расписание остаются как есть.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setRenameTeacher(null)}
+                disabled={renameSaving}
+              >
+                Отмена
+              </Button>
+              <Button onClick={handleRenameTeacher} disabled={renameSaving}>
+                {renameSaving ? "Сохранение..." : "Сохранить"}
               </Button>
             </div>
           </div>
