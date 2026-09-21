@@ -50,6 +50,9 @@ export async function POST(request: NextRequest) {
           teacherId: slot.teacherId,
           studentId: slot.studentId,
           groupId: slot.groupId,
+          // Тип услуги переносим, а frozenPrice — нет: цену возьмёт актуальную из матрицы
+          serviceTypeId: slot.serviceTypeId,
+          branchId: slot.branchId,
           dayOfWeek: slot.dayOfWeek,
           startTime: slot.startTime,
           endTime: slot.endTime,

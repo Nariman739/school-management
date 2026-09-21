@@ -173,6 +173,12 @@ export default function SchedulePage() {
   const [formGroup, setFormGroup] = useState("");
   const [formCategory, setFormCategory] = useState("");
   const [formRoom, setFormRoom] = useState("");
+  // Дни, на которые ставим занятие (по умолчанию — все дни вкладки)
+  const [formDays, setFormDays] = useState<number[]>([]);
+  // Диалог удаления: занятие (слоты по дням) + какие дни удалять
+  const [deleteEntry, setDeleteEntry] = useState<ScheduleSlot[] | null>(null);
+  const [deleteDays, setDeleteDays] = useState<number[]>([]);
+  const [deleting, setDeleting] = useState(false);
   const [formServiceTypeId, setFormServiceTypeId] = useState("");
   // Создание новой пары прямо из диалога расписания
   const [newPairOpen, setNewPairOpen] = useState(false);
@@ -267,11 +273,22 @@ export default function SchedulePage() {
   );
   const displayTeachers = [...teachersWithSlots, ...teachersWithoutSlots];
 
-  // Получить слот для ячейки
-  const getSlotForCell = (teacherId: string, time: string): ScheduleSlot | undefined => {
-    return slots.find(
-      (s) => s.teacherId === teacherId && s.startTime === time
-    );
+  const dayLabel = (day: number) =>
+    DAYS_OF_WEEK.find((d) => d.value === day)?.label ?? String(day);
+
+  // Занятия в ячейке: слоты с одинаковым содержимым склеиваются в одно занятие
+  // со списком дней. Обычно занятие одно на все дни вкладки, но ученик может
+  // стоять в Пн у одного педагога, а в Ср/Пт — у другого.
+  const getEntriesForCell = (teacherId: string, time: string): ScheduleSlot[][] => {
+    const byContent = new Map<string, ScheduleSlot[]>();
+    for (const s of slots) {
+      if (s.teacherId !== teacherId || s.startTime !== time) continue;
+      const key = [s.lessonType, s.studentId ?? "", s.groupId ?? "", s.lessonCategory ?? ""].join("|");
+      byContent.set(key, [...(byContent.get(key) ?? []), s]);
+    }
+    return [...byContent.values()]
+      .map((entry) => entry.sort((a, b) => a.dayOfWeek - b.dayOfWeek))
+      .sort((a, b) => a[0].dayOfWeek - b[0].dayOfWeek);
   };
 
   const teacherFullName = (teacher: Teacher) =>
@@ -339,15 +356,25 @@ export default function SchedulePage() {
     setFormServiceTypeId("");
     const teacher = teachers.find((t) => t.id === teacherId);
     setFormRoom(teacher?.room ?? "");
+    // По умолчанию — все дни вкладки, в которые педагог в это время свободен
+    const busyDays = new Set(
+      slots
+        .filter((s) => s.teacherId === teacherId && s.startTime === time)
+        .map((s) => s.dayOfWeek)
+    );
+    setFormDays(currentDayGroup.days.filter((d) => !busyDays.has(d)));
     setError("");
     setDialogOpen(true);
   };
 
   const handleAddSlot = async () => {
     setError("");
-    // Для каждого дня в группе создаём слот
-    const days = currentDayGroup.days;
-    let lastError = "";
+    const days = currentDayGroup.days.filter((d) => formDays.includes(d));
+    if (days.length === 0) {
+      setError("Выберите хотя бы один день");
+      return;
+    }
+    const failures: { day: number; message: string }[] = [];
     let created = 0;
 
     for (const dayOfWeek of days) {
@@ -384,54 +411,60 @@ export default function SchedulePage() {
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        lastError = data.error || "Ошибка при создании";
+        const data = await res.json().catch(() => ({}));
+        failures.push({ day: dayOfWeek, message: data.error || "Ошибка при создании" });
       } else {
         created++;
       }
     }
 
-    if (created === 0) {
-      setError(lastError);
+    if (created > 0) fetchSlots();
+
+    if (failures.length > 0) {
+      // Не молчим о днях, в которые занятие не встало: диалог остаётся открытым
+      // с этими днями, чтобы можно было поправить и повторить.
+      const failedText = failures.map((f) => `${dayLabel(f.day)}: ${f.message}`).join("; ");
+      const createdText = created > 0
+        ? `Поставлено: ${days.filter((d) => !failures.some((f) => f.day === d)).map(dayLabel).join(", ")}. `
+        : "";
+      setError(`${createdText}Не поставлено — ${failedText}`);
+      setFormDays(failures.map((f) => f.day));
       return;
     }
 
     setDialogOpen(false);
-    fetchSlots();
   };
 
-  const handleDeleteSlot = async (slotId: string) => {
-    const slot = slots.find((s) => s.id === slotId);
-    if (!slot) return;
+  // Клик по занятию → диалог удаления: по умолчанию все его дни,
+  // но можно снять только один день (ученик в среду ушёл к другому педагогу).
+  const openDeleteDialog = (entry: ScheduleSlot[]) => {
+    setDeleteEntry(entry);
+    setDeleteDays(entry.map((s) => s.dayOfWeek));
+  };
 
-    // Слот создаётся сразу для всех дней группы (Пн/Ср/Пт или Вт/Чт),
-    // поэтому удаляем все парные слоты с тем же teacher+time на этой неделе.
-    const slotsToDelete = slots.filter(
-      (s) =>
-        s.teacherId === slot.teacherId &&
-        s.startTime === slot.startTime &&
-        currentDayGroup.days.includes(s.dayOfWeek)
-    );
+  const handleDeleteEntry = async () => {
+    if (!deleteEntry) return;
+    const slotsToDelete = deleteEntry.filter((s) => deleteDays.includes(s.dayOfWeek));
+    if (slotsToDelete.length === 0) return;
 
-    const dayLabel = currentDayGroup.label;
-    const confirmMsg =
-      slotsToDelete.length > 1
-        ? `Удалить занятие во все дни (${dayLabel})? Будет удалено ${slotsToDelete.length} слот(ов).`
-        : "Удалить этот слот?";
-    if (!confirm(confirmMsg)) return;
+    setDeleting(true);
+    try {
+      const results = await Promise.all(
+        slotsToDelete.map((s) =>
+          fetch(`/api/schedule/${s.id}`, { method: "DELETE" })
+        )
+      );
 
-    const results = await Promise.all(
-      slotsToDelete.map((s) =>
-        fetch(`/api/schedule/${s.id}`, { method: "DELETE" })
-      )
-    );
+      const failed = results.filter((r) => !r.ok).length;
+      if (failed > 0) {
+        alert(`Не удалось удалить ${failed} из ${slotsToDelete.length} слотов`);
+      }
 
-    const failed = results.filter((r) => !r.ok).length;
-    if (failed > 0) {
-      alert(`Не удалось удалить ${failed} из ${slotsToDelete.length} слотов`);
+      setDeleteEntry(null);
+      fetchSlots();
+    } finally {
+      setDeleting(false);
     }
-
-    fetchSlots();
   };
 
   const openAttendeesDialog = (slot: ScheduleSlot) => {
@@ -1113,36 +1146,63 @@ export default function SchedulePage() {
                     {time}
                   </td>
                   {displayTeachers.map((teacher) => {
-                    const slot = getSlotForCell(teacher.id, time);
+                    const entries = getEntriesForCell(teacher.id, time);
+                    const takenDays = new Set(entries.flat().map((s) => s.dayOfWeek));
+                    const freeDays = currentDayGroup.days.filter((d) => !takenDays.has(d));
+                    // Занятие стоит не на все дни вкладки → подписываем дни
+                    const showDays = entries.length > 1 || freeDays.length > 0;
                     return (
                       <td
                         key={teacher.id}
                         className="border-b border-r p-1 align-top"
                         style={{ minWidth: 110, height: 44 }}
                       >
-                        {slot ? (
-                          <div
-                            className={`relative rounded px-2 py-1 text-xs ${getCellStyle(slot)}`}
-                            title={`${getSlotLabel(slot)}${slot.room ? ` | ${slot.room}` : ""}`}
-                          >
-                            <div
-                              className="cursor-pointer font-medium truncate pr-10"
-                              onClick={() => handleDeleteSlot(slot.id)}
-                              title="Нажмите для удаления"
-                            >
-                              {getSlotLabel(slot)}
-                            </div>
-                            {slot.lessonType === "GROUP" && slot.group && (
+                        {entries.length > 0 ? (
+                          <div className="space-y-0.5">
+                            {entries.map((entry) => {
+                              const slot = entry[0];
+                              const daysText = entry.map((s) => dayLabel(s.dayOfWeek)).join(" ");
+                              return (
+                                <div
+                                  key={slot.id}
+                                  className={`relative rounded px-2 py-1 text-xs ${getCellStyle(slot)}`}
+                                  title={`${showDays ? `${daysText}: ` : ""}${getSlotLabel(slot)}${slot.room ? ` | ${slot.room}` : ""}`}
+                                >
+                                  <div
+                                    className="cursor-pointer font-medium truncate pr-10"
+                                    onClick={() => openDeleteDialog(entry)}
+                                    title="Нажмите для удаления"
+                                  >
+                                    {showDays && (
+                                      <span className="mr-1 rounded bg-white/70 px-1 text-[9px] font-semibold text-gray-700">
+                                        {daysText}
+                                      </span>
+                                    )}
+                                    {getSlotLabel(slot)}
+                                  </div>
+                                  {slot.lessonType === "GROUP" && slot.group && (
+                                    <button
+                                      type="button"
+                                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded bg-white/70 px-1 py-0.5 text-[9px] font-medium text-gray-700 hover:bg-white"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        openAttendeesDialog(slot);
+                                      }}
+                                      title="Изменить состав занятия"
+                                    >
+                                      Состав
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                            {freeDays.length > 0 && (
                               <button
-                                type="button"
-                                className="absolute right-1 top-1/2 -translate-y-1/2 rounded bg-white/70 px-1 py-0.5 text-[9px] font-medium text-gray-700 hover:bg-white"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openAttendeesDialog(slot);
-                                }}
-                                title="Изменить состав занятия"
+                                className="flex w-full items-center justify-center rounded border border-dashed border-gray-200 py-0.5 text-[10px] text-gray-400 hover:border-gray-400 hover:text-gray-600"
+                                onClick={() => openAddDialog(teacher.id, time)}
+                                title="Добавить занятие на свободные дни"
                               >
-                                Состав
+                                + {freeDays.map(dayLabel).join(" ")}
                               </button>
                             )}
                           </div>
@@ -1195,6 +1255,36 @@ export default function SchedulePage() {
             {error && (
               <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-600">
                 {error}
+              </div>
+            )}
+
+            {/* Дни: по умолчанию все, можно оставить только нужные */}
+            {currentDayGroup.days.length > 1 && (
+              <div>
+                <label className="mb-1 block text-sm font-medium">Дни</label>
+                <div className="flex gap-2">
+                  {currentDayGroup.days.map((day) => {
+                    const checked = formDays.includes(day);
+                    return (
+                      <button
+                        key={day}
+                        type="button"
+                        onClick={() =>
+                          setFormDays((prev) =>
+                            checked ? prev.filter((d) => d !== day) : [...prev, day]
+                          )
+                        }
+                        className={`rounded-md border px-4 py-1.5 text-sm font-medium ${
+                          checked
+                            ? "border-blue-600 bg-blue-600 text-white"
+                            : "border-gray-300 bg-white text-gray-500"
+                        }`}
+                      >
+                        {dayLabel(day)}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -1375,6 +1465,63 @@ export default function SchedulePage() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Диалог удаления занятия (с выбором дней) */}
+      <Dialog open={deleteEntry !== null} onOpenChange={(open) => !open && setDeleteEntry(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Удалить занятие</DialogTitle>
+          </DialogHeader>
+          {deleteEntry && (
+            <div className="space-y-4">
+              <p className="text-sm text-gray-700">
+                {getSlotLabel(deleteEntry[0])} — {deleteEntry[0].startTime},{" "}
+                {deleteEntry[0].teacher.firstName} {deleteEntry[0].teacher.lastName}
+              </p>
+              {deleteEntry.length > 1 && (
+                <div>
+                  <label className="mb-1 block text-sm font-medium">В какие дни удалить</label>
+                  <div className="flex gap-2">
+                    {deleteEntry.map((s) => {
+                      const checked = deleteDays.includes(s.dayOfWeek);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() =>
+                            setDeleteDays((prev) =>
+                              checked ? prev.filter((d) => d !== s.dayOfWeek) : [...prev, s.dayOfWeek]
+                            )
+                          }
+                          className={`rounded-md border px-4 py-1.5 text-sm font-medium ${
+                            checked
+                              ? "border-red-600 bg-red-600 text-white"
+                              : "border-gray-300 bg-white text-gray-500"
+                          }`}
+                        >
+                          {dayLabel(s.dayOfWeek)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setDeleteEntry(null)}>
+                  Отмена
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={handleDeleteEntry}
+                  disabled={deleting || deleteDays.length === 0}
+                >
+                  {deleting ? "Удаляю…" : "Удалить"}
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
