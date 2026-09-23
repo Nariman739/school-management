@@ -151,6 +151,57 @@ function getSlotLabel(slot: ScheduleSlot): string {
   return "—";
 }
 
+// Список с поиском: 135 учеников в обычном выпадающем списке не найти,
+// а замена ученика после копирования недели — самая частая операция.
+function PickerList({
+  items,
+  value,
+  onChange,
+  placeholder,
+}: {
+  items: { id: string; label: string; hint?: string }[];
+  value: string;
+  onChange: (id: string) => void;
+  placeholder: string;
+}) {
+  const [query, setQuery] = useState("");
+  const norm = (s: string) => s.toLowerCase().replace(/ё/g, "е");
+  const q = norm(query.trim());
+  const filtered = q
+    ? items.filter((i) => norm(`${i.label} ${i.hint ?? ""}`).includes(q))
+    : items;
+
+  return (
+    <div className="rounded-md border">
+      <input
+        className="w-full rounded-t-md border-b px-3 py-2 text-sm outline-none"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={placeholder}
+        autoFocus
+      />
+      <div className="max-h-44 overflow-y-auto">
+        {filtered.length === 0 && (
+          <div className="px-3 py-2 text-sm text-gray-400">Никого не нашли</div>
+        )}
+        {filtered.map((i) => (
+          <button
+            key={i.id}
+            type="button"
+            onClick={() => onChange(i.id)}
+            className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-sm ${
+              i.id === value ? "bg-blue-50 font-medium text-blue-900" : "hover:bg-gray-50"
+            }`}
+          >
+            <span className="truncate">{i.label}</span>
+            {i.hint && <span className="ml-2 shrink-0 text-xs text-gray-400">{i.hint}</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function SchedulePage() {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date()));
   const [activeDayGroup, setActiveDayGroup] = useState("mwf");
@@ -175,9 +226,14 @@ export default function SchedulePage() {
   const [formRoom, setFormRoom] = useState("");
   // Дни, на которые ставим занятие (по умолчанию — все дни вкладки)
   const [formDays, setFormDays] = useState<number[]>([]);
-  // Диалог удаления: занятие (слоты по дням) + какие дни удалять
-  const [deleteEntry, setDeleteEntry] = useState<ScheduleSlot[] | null>(null);
-  const [deleteDays, setDeleteDays] = useState<number[]>([]);
+  // Диалог занятия: слоты одного занятия по дням + что с ними делаем
+  const [editEntry, setEditEntry] = useState<ScheduleSlot[] | null>(null);
+  const [editDays, setEditDays] = useState<number[]>([]);
+  const [editTarget, setEditTarget] = useState("");
+  const [editCategory, setEditCategory] = useState("__none__");
+  const [editError, setEditError] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [editToast, setEditToast] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [formServiceTypeId, setFormServiceTypeId] = useState("");
   // Создание новой пары прямо из диалога расписания
@@ -248,6 +304,12 @@ export default function SchedulePage() {
   useEffect(() => {
     fetchSlots();
   }, [fetchSlots]);
+
+  useEffect(() => {
+    if (!editToast) return;
+    const t = setTimeout(() => setEditToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [editToast]);
 
   useEffect(() => {
     Promise.all([
@@ -435,17 +497,83 @@ export default function SchedulePage() {
     setDialogOpen(false);
   };
 
-  // Клик по занятию → диалог удаления: по умолчанию все его дни,
-  // но можно снять только один день (ученик в среду ушёл к другому педагогу).
-  const openDeleteDialog = (entry: ScheduleSlot[]) => {
-    setDeleteEntry(entry);
-    setDeleteDays(entry.map((s) => s.dayOfWeek));
+  // Клик по занятию → диалог занятия: по умолчанию все его дни,
+  // но можно снять день (ученик в среду ушёл к другому педагогу).
+  const openEditDialog = (entry: ScheduleSlot[]) => {
+    setEditEntry(entry);
+    setEditDays(entry.map((s) => s.dayOfWeek));
+    setEditTarget(entry[0].studentId ?? entry[0].groupId ?? "");
+    setEditCategory(entry[0].lessonCategory ?? "__none__");
+    setEditError("");
+  };
+
+  // Замена ученика/группы и категории — главная операция после копирования недели:
+  // раньше приходилось удалять занятие и создавать заново.
+  const handleSaveEntry = async () => {
+    if (!editEntry) return;
+    const slotsToUpdate = editEntry.filter((s) => editDays.includes(s.dayOfWeek));
+    if (slotsToUpdate.length === 0) return;
+
+    const isIndividual = editEntry[0].lessonType === "INDIVIDUAL";
+    const category = editCategory === "__none__" ? null : editCategory;
+    const targetChanged = editTarget !== (editEntry[0].studentId ?? editEntry[0].groupId ?? "");
+    const categoryChanged = category !== (editEntry[0].lessonCategory ?? null);
+    const daysUntouched = editDays.length === editEntry.length;
+
+    if (!targetChanged && !categoryChanged) {
+      setEditEntry(null);
+      return;
+    }
+
+    setEditSaving(true);
+    setEditError("");
+    try {
+      const failures: { day: number; message: string }[] = [];
+
+      for (const slot of slotsToUpdate) {
+        const body: Record<string, unknown> = { lessonCategory: category };
+        if (targetChanged) {
+          if (isIndividual) body.studentId = editTarget;
+          else body.groupId = editTarget;
+        }
+
+        const res = await fetch(`/api/schedule/${slot.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          failures.push({ day: slot.dayOfWeek, message: data.error || "Не удалось сохранить" });
+        }
+      }
+
+      if (failures.length > 0) {
+        fetchSlots();
+        setEditError(
+          `Не сохранено — ${failures.map((f) => `${dayLabel(f.day)}: ${f.message}`).join("; ")}`
+        );
+        return;
+      }
+
+      setEditEntry(null);
+      fetchSlots();
+      setEditToast(
+        daysUntouched
+          ? "Занятие изменено"
+          : `Изменено: ${slotsToUpdate.map((s) => dayLabel(s.dayOfWeek)).join(", ")}`
+      );
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   const handleDeleteEntry = async () => {
-    if (!deleteEntry) return;
-    const slotsToDelete = deleteEntry.filter((s) => deleteDays.includes(s.dayOfWeek));
+    if (!editEntry) return;
+    const slotsToDelete = editEntry.filter((s) => editDays.includes(s.dayOfWeek));
     if (slotsToDelete.length === 0) return;
+    if (!confirm(`Удалить занятие (${slotsToDelete.map((s) => dayLabel(s.dayOfWeek)).join(", ")})?`)) return;
 
     setDeleting(true);
     try {
@@ -457,10 +585,12 @@ export default function SchedulePage() {
 
       const failed = results.filter((r) => !r.ok).length;
       if (failed > 0) {
-        alert(`Не удалось удалить ${failed} из ${slotsToDelete.length} слотов`);
+        setEditError(`Не удалось удалить ${failed} из ${slotsToDelete.length} занятий`);
+        fetchSlots();
+        return;
       }
 
-      setDeleteEntry(null);
+      setEditEntry(null);
       fetchSlots();
     } finally {
       setDeleting(false);
@@ -1083,6 +1213,12 @@ export default function SchedulePage() {
         </div>
       </div>
 
+      {editToast && (
+        <div className="mb-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+          {editToast}
+        </div>
+      )}
+
       {/* Табы дней */}
       <div className="mb-4 flex gap-1">
         {DAY_GROUPS.map((dg) => (
@@ -1154,6 +1290,8 @@ export default function SchedulePage() {
                     return (
                       <td
                         key={teacher.id}
+                        data-teacher-id={teacher.id}
+                        data-time={time}
                         className="border-b border-r p-1 align-top"
                         style={{ minWidth: 110, height: 44 }}
                       >
@@ -1170,8 +1308,8 @@ export default function SchedulePage() {
                                 >
                                   <div
                                     className="cursor-pointer font-medium truncate pr-10"
-                                    onClick={() => openDeleteDialog(entry)}
-                                    title="Нажмите для удаления"
+                                    onClick={() => openEditDialog(entry)}
+                                    title="Нажмите, чтобы заменить ученика или удалить"
                                   >
                                     {showDays && (
                                       <span className="mr-1 rounded bg-white/70 px-1 text-[9px] font-semibold text-gray-700">
@@ -1332,19 +1470,16 @@ export default function SchedulePage() {
                 {formType === "INDIVIDUAL" && (
                   <div>
                     <label className="mb-1 block text-sm font-medium">Ученик</label>
-                    <Select value={formStudent} onValueChange={setFormStudent}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Выберите ученика" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {students.map((s) => (
-                          <SelectItem key={s.id} value={s.id}>
-                            {s.lastName} {s.firstName}
-                            {s.studentNumber != null && ` #${s.studentNumber.toString().padStart(3, "0")}`}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <PickerList
+                      items={students.map((s) => ({
+                        id: s.id,
+                        label: `${s.lastName} ${s.firstName}`,
+                        hint: s.studentNumber != null ? `#${s.studentNumber.toString().padStart(3, "0")}` : "",
+                      }))}
+                      value={formStudent}
+                      onChange={setFormStudent}
+                      placeholder="Начните вводить имя или номер"
+                    />
                   </div>
                 )}
 
@@ -1468,36 +1603,49 @@ export default function SchedulePage() {
         </DialogContent>
       </Dialog>
 
-      {/* Диалог удаления занятия (с выбором дней) */}
-      <Dialog open={deleteEntry !== null} onOpenChange={(open) => !open && setDeleteEntry(null)}>
+      {/* Диалог занятия: заменить ученика / изменить дни / удалить */}
+      <Dialog open={editEntry !== null} onOpenChange={(open) => !open && setEditEntry(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Удалить занятие</DialogTitle>
+            <DialogTitle>
+              Занятие — {editEntry?.[0].startTime}
+              <span className="ml-2 text-sm font-normal text-gray-500">
+                {editEntry?.[0].teacher.firstName} {editEntry?.[0].teacher.lastName}
+              </span>
+            </DialogTitle>
           </DialogHeader>
-          {deleteEntry && (
+          {editEntry && (
             <div className="space-y-4">
+              {editError && (
+                <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-600">
+                  {editError}
+                </div>
+              )}
+
               <p className="text-sm text-gray-700">
-                {getSlotLabel(deleteEntry[0])} — {deleteEntry[0].startTime},{" "}
-                {deleteEntry[0].teacher.firstName} {deleteEntry[0].teacher.lastName}
+                Сейчас: <span className="font-medium">{getSlotLabel(editEntry[0])}</span>
               </p>
-              {deleteEntry.length > 1 && (
+
+              {editEntry.length > 1 && (
                 <div>
-                  <label className="mb-1 block text-sm font-medium">В какие дни удалить</label>
+                  <label className="mb-1 block text-sm font-medium">
+                    Дни <span className="text-xs font-normal text-gray-500">(изменение применится к выбранным)</span>
+                  </label>
                   <div className="flex gap-2">
-                    {deleteEntry.map((s) => {
-                      const checked = deleteDays.includes(s.dayOfWeek);
+                    {editEntry.map((s) => {
+                      const checked = editDays.includes(s.dayOfWeek);
                       return (
                         <button
                           key={s.id}
                           type="button"
                           onClick={() =>
-                            setDeleteDays((prev) =>
+                            setEditDays((prev) =>
                               checked ? prev.filter((d) => d !== s.dayOfWeek) : [...prev, s.dayOfWeek]
                             )
                           }
                           className={`rounded-md border px-4 py-1.5 text-sm font-medium ${
                             checked
-                              ? "border-red-600 bg-red-600 text-white"
+                              ? "border-blue-600 bg-blue-600 text-white"
                               : "border-gray-300 bg-white text-gray-500"
                           }`}
                         >
@@ -1508,17 +1656,71 @@ export default function SchedulePage() {
                   </div>
                 </div>
               )}
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setDeleteEntry(null)}>
-                  Отмена
-                </Button>
+
+              {editEntry[0].lessonCategory !== "Метод" && editEntry[0].lessonCategory !== "Стажировка" && (
+                <div>
+                  <label className="mb-1 block text-sm font-medium">
+                    {editEntry[0].lessonType === "INDIVIDUAL" ? "Ученик" : "Группа"}
+                    <span className="ml-1 text-xs font-normal text-gray-500">— выберите другого, чтобы заменить</span>
+                  </label>
+                  <PickerList
+                    items={
+                      editEntry[0].lessonType === "INDIVIDUAL"
+                        ? students.map((s) => ({
+                            id: s.id,
+                            label: `${s.lastName} ${s.firstName}`,
+                            hint: s.studentNumber != null ? `#${s.studentNumber.toString().padStart(3, "0")}` : "",
+                          }))
+                        : groups
+                            .filter((g) => (g.groupType === "PAIR") === (editEntry[0].group?.groupType === "PAIR"))
+                            .map((g) => ({
+                              id: g.id,
+                              label:
+                                g.name ??
+                                (g.members ?? []).map((m) => `${m.student.firstName} ${m.student.lastName}`).join(" + "),
+                              hint: `${g.members?.length || 0} уч.`,
+                            }))
+                    }
+                    value={editTarget}
+                    onChange={setEditTarget}
+                    placeholder="Начните вводить имя или номер"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="mb-1 block text-sm font-medium">Категория</label>
+                <Select value={editCategory} onValueChange={setEditCategory}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Без категории" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Без категории</SelectItem>
+                    {LESSON_CATEGORIES.map((cat) => (
+                      <SelectItem key={cat.value} value={cat.value}>
+                        {cat.value} — {cat.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="flex items-center justify-between gap-2 pt-1">
                 <Button
                   variant="destructive"
                   onClick={handleDeleteEntry}
-                  disabled={deleting || deleteDays.length === 0}
+                  disabled={deleting || editSaving || editDays.length === 0}
                 >
-                  {deleting ? "Удаляю…" : "Удалить"}
+                  {deleting ? "Удаляю…" : editEntry.length > 1 ? "Удалить в выбранных днях" : "Удалить"}
                 </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setEditEntry(null)}>
+                    Отмена
+                  </Button>
+                  <Button onClick={handleSaveEntry} disabled={editSaving || deleting || editDays.length === 0}>
+                    {editSaving ? "Сохраняю…" : "Сохранить"}
+                  </Button>
+                </div>
               </div>
             </div>
           )}

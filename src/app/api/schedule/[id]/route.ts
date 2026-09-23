@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { freezePriceForSlot, getDefaultServiceTypeForSlot } from "@/lib/pricing";
 
 // PUT /api/schedule/[id] — обновить слот
 export async function PUT(
@@ -20,6 +21,7 @@ export async function PUT(
       lessonType,
       lessonCategory,
       room,
+      serviceTypeId,
     } = body;
 
     const existing = await prisma.scheduleSlot.findUnique({ where: { id } });
@@ -77,18 +79,53 @@ export async function PUT(
       }
     }
 
+    // Если поменялся участник или тип занятия — пересчитываем услугу и цену,
+    // иначе в слоте осталась бы замороженная цена прежнего ученика.
+    const participantChanged =
+      finalStudentId !== existing.studentId ||
+      finalGroupId !== existing.groupId ||
+      finalLessonType !== existing.lessonType;
+
+    let finalServiceTypeId = serviceTypeId !== undefined ? serviceTypeId : existing.serviceTypeId;
+    let finalFrozenPrice = existing.frozenPrice;
+
+    if (participantChanged || finalServiceTypeId !== existing.serviceTypeId) {
+      if (!finalServiceTypeId) {
+        let groupType: string | null = null;
+        if (finalGroupId) {
+          const g = await prisma.group.findUnique({
+            where: { id: finalGroupId },
+            select: { groupType: true },
+          });
+          groupType = g?.groupType ?? null;
+        }
+        const def = await getDefaultServiceTypeForSlot({ lessonType: finalLessonType, groupType });
+        finalServiceTypeId = def?.id ?? null;
+      }
+
+      finalFrozenPrice = await freezePriceForSlot({
+        studentId: finalStudentId,
+        groupId: finalGroupId,
+        serviceTypeId: finalServiceTypeId,
+      });
+    }
+
     const slot = await prisma.scheduleSlot.update({
       where: { id },
       data: {
         teacherId: finalTeacherId,
         studentId: finalStudentId || null,
         groupId: finalGroupId || null,
+        serviceTypeId: finalServiceTypeId,
+        frozenPrice: finalFrozenPrice,
         dayOfWeek: finalDayOfWeek,
         startTime: finalStartTime,
         endTime: endTime ?? existing.endTime,
         lessonType: finalLessonType,
         lessonCategory: finalLessonCategory || null,
         room: finalRoom || null,
+        // состав занятия относился к прежней группе — сбрасываем
+        attendees: finalGroupId !== existing.groupId ? { deleteMany: {} } : undefined,
       },
       include: {
         teacher: true,
@@ -98,6 +135,8 @@ export async function PUT(
             members: { include: { student: true } },
           },
         },
+        serviceType: true,
+        attendees: { include: { student: true } },
       },
     });
 
