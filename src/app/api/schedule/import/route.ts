@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getEndTime, DAY_GROUPS } from "@/lib/schedule-utils";
+import { freezePriceForSlot, getDefaultServiceTypeForSlot } from "@/lib/pricing";
 import {
   extractSheetId,
   buildCsvUrl,
   parseCsvToGrid,
   matchGridV2,
   detectFormat,
+  parseCellValueV2,
 } from "@/lib/import-utils";
 import type { ImportPreviewV2, MatchedRowV2 } from "@/lib/import-utils";
 
@@ -114,15 +116,30 @@ export async function POST(request: NextRequest) {
 
     // 6. Применить сохранённые псевдонимы к строкам с ошибками
     if (savedAliases.length > 0) {
-      const teacherAliasMap = new Map(
-        savedAliases.filter((a) => a.type === "teacher").map((a) => [a.alias, a.entityId])
-      );
-      const studentAliasMap = new Map(
-        savedAliases.filter((a) => a.type === "student").map((a) => [a.alias, a.entityId])
-      );
-      const groupAliasMap = new Map(
-        savedAliases.filter((a) => a.type === "group").map((a) => [a.alias, a.entityId])
-      );
+      // Сокращения Дархана записаны без категории («АдельА»), а в ячейке стоит
+      // «АдельА И» или «АдельА ТЕХ пн». Поэтому ищем и по всей ячейке (так
+      // сохраняются псевдонимы из интерфейса), и по одному имени из разбора.
+      const aliasKey = (s: string) => s.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, "").trim();
+      const mapOf = (type: string) => {
+        const map = new Map<string, string>();
+        for (const a of savedAliases.filter((x) => x.type === type)) {
+          map.set(aliasKey(a.alias), a.entityId);
+        }
+        return map;
+      };
+      const teacherAliasMap = mapOf("teacher");
+      const studentAliasMap = mapOf("student");
+      const groupAliasMap = mapOf("group");
+      const nameOf = (cellValue: string) => {
+        const parsed = parseCellValueV2(cellValue);
+        return parsed.type === "student" && parsed.names[0] ? parsed.names[0] : null;
+      };
+      const lookup = (map: Map<string, string>, cellValue: string) => {
+        const direct = map.get(aliasKey(cellValue));
+        if (direct) return direct;
+        const name = nameOf(cellValue);
+        return name ? map.get(aliasKey(name)) : undefined;
+      };
 
       for (const match of result.matches) {
         if (match.errors.length === 0) continue;
@@ -130,7 +147,7 @@ export async function POST(request: NextRequest) {
         // Исправить ошибку учителя
         const hasTeacherError = match.errors.some((e) => e.startsWith("Учитель не найден"));
         if (hasTeacherError) {
-          const aliasId = teacherAliasMap.get(match.cell.teacherName);
+          const aliasId = teacherAliasMap.get(aliasKey(match.cell.teacherName));
           if (aliasId) {
             const teacher = teachers.find((t) => t.id === aliasId);
             if (teacher) {
@@ -147,8 +164,8 @@ export async function POST(request: NextRequest) {
         );
         if (hasStudentError) {
           const cellValue = match.cell.cellValue;
-          const studentId = studentAliasMap.get(cellValue);
-          const groupId = groupAliasMap.get(cellValue);
+          const studentId = lookup(studentAliasMap, cellValue);
+          const groupId = lookup(groupAliasMap, cellValue);
 
           if (studentId) {
             const student = students.find((s) => s.id === studentId);
@@ -201,7 +218,8 @@ export async function POST(request: NextRequest) {
       const dg = DAY_GROUPS.find((g) =>
         result.detectedFormat === "v2-multiblock" ? g.id === matchV2.dayGroup : g.id === dayGroup
       );
-      const days = dg?.days ?? [];
+      // Ячейка могла указать конкретные дни: «РамзанаА И пн» — только понедельник.
+      const days = matchV2.days ?? dg?.days ?? [];
 
       for (const dayOfWeek of days) {
         const teacherConflict = await prisma.scheduleSlot.findFirst({
@@ -235,11 +253,26 @@ export async function POST(request: NextRequest) {
         }
 
         try {
+          const serviceTypeId =
+            (await getDefaultServiceTypeForSlot({
+              lessonType: match.lessonType ?? null,
+              groupType: match.groupId
+                ? groups.find((g) => g.id === match.groupId)?.groupType ?? null
+                : null,
+            }))?.id ?? null;
+          const frozenPrice = await freezePriceForSlot({
+            studentId: match.studentId ?? null,
+            groupId: match.groupId ?? null,
+            serviceTypeId,
+          });
+
           await prisma.scheduleSlot.create({
             data: {
               teacherId: match.teacherId!,
               studentId: match.studentId ?? null,
               groupId: match.groupId ?? null,
+              serviceTypeId,
+              frozenPrice,
               dayOfWeek,
               startTime: match.startTime!,
               endTime: getEndTime(match.startTime!),
@@ -263,7 +296,7 @@ export async function POST(request: NextRequest) {
       const dg = DAY_GROUPS.find((g) =>
         result.detectedFormat === "v2-multiblock" ? g.id === matchV2.dayGroup : g.id === dayGroup
       );
-      expectedTotal += dg?.days.length ?? 0;
+      expectedTotal += (matchV2.days ?? dg?.days)?.length ?? 0;
     }
 
     return NextResponse.json({ count: created, total: expectedTotal, errors: importErrors });

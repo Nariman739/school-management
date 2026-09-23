@@ -302,6 +302,17 @@ export function matchTeacher(
         t.lastName.toLowerCase().startsWith(lastInitial)
       );
       if (byThree.length === 1) return byThree[0];
+
+      // Отчество с опечаткой: «Дарья АлександрКовна Х.» → Дарья Александровна Хитрик.
+      // Имя и первая буква фамилии должны совпасть точно, опечатка допускается
+      // только в отчестве и только если кандидат один.
+      const byThreeFuzzy = teachers.filter(
+        (t) =>
+          t.firstName.toLowerCase() === firstName &&
+          t.lastName.toLowerCase().startsWith(lastInitial) &&
+          levenshtein((t.patronymic ?? "").toLowerCase(), patronymic) <= 2,
+      );
+      if (byThreeFuzzy.length === 1) return byThreeFuzzy[0];
     }
   }
 
@@ -620,6 +631,9 @@ export interface GridCellV2 extends GridCell {
 export interface MatchedRowV2 extends MatchedRow {
   dayGroup: "mwf" | "tt";
   room: string | null;
+  // Конкретные дни из ячейки: «РамзанаА И пн» — занятие только в понедельник,
+  // а не во все дни колонки. Пусто — значит все дни колонки.
+  days?: number[];
 }
 
 export type ImportFormatV2 = "v1-simple" | "v2-multiblock" | "v3-saturday";
@@ -738,23 +752,42 @@ function parseTeacherHeaderV2(header: string): {
   specialization: string | null;
   room: string | null;
 } {
-  // Нормализуем пробелы: «Оксана Ивановна И +А» → «Оксана Ивановна И+А».
-  let remaining = header.trim().replace(/\s+\+\s*/g, "+");
+  // Нормализуем переводы строк и пробелы: «Оксана Ивановна И +А» → «Оксана Ивановна И+А».
+  // Переносы строк важны: в файле 23.09 кабинет уехал на вторую строку («Мадина
+  // Жанболатовна И \n№5») и мешал узнать педагога.
+  let remaining = header.replace(/[\r\n]+/g, " ").trim().replace(/\s+\+\s*/g, "+");
 
-  // Извлечь кабинет: "№1каб", "№11 каб", "№1 + 3 + 4 каб", "№ 5каб"
+  // Пометки в скобках: «Алина Эдуардовна А пн вт (ок)СР(нет)»
+  remaining = remaining.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+
+  // Извлечь кабинет: "№1каб", "№11 каб", "№1 + 3 + 4 каб", "№ 5каб", "каб 5",
+  // а также голый номер без слова «каб» — «№5».
   let room: string | null = null;
-  const roomMatch = remaining.match(/№\s*([\d\s+]+)\s*каб/i);
-  if (roomMatch) {
-    room = roomMatch[1].trim();
-    remaining = remaining.replace(roomMatch[0], "").trim();
+  const roomPatterns = [
+    /№\s*([\d\s+]+)\s*каб\.?/i,
+    /каб\.?\s*№?\s*([\d\s+]+)/i,
+    /№\s*([\d\s+]+)/,
+  ];
+  for (const pattern of roomPatterns) {
+    const m = remaining.match(pattern);
+    if (!m) continue;
+    if (!room) room = m[1].trim();
+    remaining = remaining.replace(m[0], " ").replace(/\s+/g, " ").trim();
+  }
+
+  // Хвостовые дни в шапке: «Алина Эдуардовна А пн вт СР»
+  for (let i = 0; i < 4; i++) {
+    const m = remaining.match(/[\s,]+(пн|вт|ср|чт|пт)\.?\s*$/i);
+    if (!m) break;
+    remaining = remaining.slice(0, m.index).trim();
   }
 
   // Извлечь специализацию: "И", "А", "Тех", "И+А", "АФК", "ЛОГ", "ИНФ", "РЛ", "ДЗ"
   // Могут быть несколько подряд: «Дильназ Ж А» → сначала «А», потом «Ж» уже
   // относится к фамилии. Отрезаем максимум 2 раза.
-  const SPEC_PATTERN = /\s+(И\+А|И|А|ТЕХ|АФК|ЛОГ|ИНФ|РЛ|ДЗ)\s*$/i;
+  const SPEC_PATTERN = /\s+(И\+А|А\+И|И|А|ТЕХ|АФК|ЛОГ|ИНФ|РЛ|ДЗ)\s*$/i;
   let specialization: string | null = null;
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 3; i++) {
     const m = remaining.match(SPEC_PATTERN);
     if (!m) break;
     if (!specialization) specialization = m[1];
@@ -903,8 +936,18 @@ const INTERNSHIP_MENTORS: Record<string, string> = {
 // «стрж пн ср»), нормализует (нижний регистр, без точек). null — не стажировка.
 function detectInternship(raw: string): { mentor: string } | null {
   const firstToken = raw.trim().split(/\s+/)[0]?.toLowerCase().replace(/\./g, "") ?? "";
-  if (firstToken && INTERNSHIP_MENTORS[firstToken]) {
+  if (!firstToken) return null;
+  if (INTERNSHIP_MENTORS[firstToken]) {
     return { mentor: INTERNSHIP_MENTORS[firstToken] };
+  }
+  // Новые наставники Дархан заводит теми же двумя буквами: «стИМ», «стАЕ», «стДА»
+  // (файл 23.09). Расшифровки у нас нет — пишем инициалы, слот всё равно без
+  // ученика и в оплату не идёт.
+  // «стИМ», «стДАХ», «ст РН» — буквы это инициалы наставника.
+  const compact = raw.trim().replace(/\s+/g, "").replace(/\./g, "").toLowerCase();
+  const generic = compact.match(/^ст([а-яё]{2,3})$/);
+  if (generic) {
+    return { mentor: `наставник ${generic[1].toUpperCase()}` };
   }
   return null;
 }
@@ -919,6 +962,13 @@ export function parseCellValueV2(cell: string): ParsedCellV2 {
 
   // Пустые / отменённые
   if (!trimmed || /^-+$/.test(trimmed) || trimmed === "/") {
+    return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
+  }
+
+  // Только день недели, без участника: «чт», «пн ср». Занятие из такой ячейки не
+  // собрать — это пометка Дархана о рабочем дне. Пропускаем, но показываем
+  // отдельным списком в отчёте, чтобы он проверил.
+  if (/^(?:пн|вт|ср|чт|пт)(?:[\s,]+(?:пн|вт|ср|чт|пт))*\.?$/i.test(trimmed)) {
     return { type: "skip", names: [], groupName: null, category: null, dayOverride: null, raw: trimmed };
   }
 
@@ -953,17 +1003,29 @@ export function parseCellValueV2(cell: string): ParsedCellV2 {
     };
   }
 
-  // Сопровождение группы: "сопр грМ0", "сопргрМНО ОНР", "сорп гр..." (опечатка)
-  const supportGroupMatch = trimmed.match(/^(?:сопр|сорп)\s*гр\.?\s*(.+)/i);
+  // Сопровождение группы: "сопр грМ0", "сопргрМНО ОНР", "сорп гр..." (опечатка),
+  // а также "сопр МНО рр", "сопр мноф" — МНО и без слова «гр» означает группу.
+  const supportGroupMatch = trimmed.match(/^(?:сопр|сорп)\s*(?:гр\.?\s*(.+)|(мно.*))$/i);
   if (supportGroupMatch) {
     return {
       type: "support_group",
       names: [],
-      groupName: supportGroupMatch[1].trim(),
+      groupName: (supportGroupMatch[1] ?? supportGroupMatch[2]).trim(),
       category: "СОПР",
       dayOverride: null,
       raw: trimmed,
     };
+  }
+
+  // Сопровождение конкретных учеников: "сопр АврораЛ", "сопр АсланА+Асанали пн",
+  // "сопрАрсланМ+АлексадрК А". Разбираем хвост как обычную ячейку с учеником,
+  // но категорию ставим СОПР.
+  const supportStudentMatch = trimmed.match(/^(?:сопр|сорп)\s*(.+)$/i);
+  if (supportStudentMatch) {
+    const inner = parseCellValueV2(supportStudentMatch[1].trim());
+    if (inner.type === "student" || inner.type === "multi_student") {
+      return { ...inner, category: "СОПР", raw: trimmed };
+    }
   }
 
   // Группа: "грМ0", "гр М0", "гр.М0", "гршк1", "гр шк 1", "грреч1", "группа X"
@@ -989,6 +1051,20 @@ export function parseCellValueV2(cell: string): ParsedCellV2 {
       dayOverride: null,
       raw: trimmed,
     };
+  }
+
+  // Сдвоенная категория в конце: «УлпанЖ А+И», «АлуаЖ+УлпанЖ А+И» — это не два
+  // ученика, а две категории сразу. Снимаем её до разбора «+».
+  const comboCategory = trimmed.match(/[\s]+((?:А|И|ТЕХ)\s*\+\s*(?:А|И|ТЕХ))\.?\s*$/i);
+  if (comboCategory) {
+    const rest = trimmed.slice(0, comboCategory.index).trim();
+    const category = comboCategory[1].replace(/\s+/g, "").toUpperCase();
+    if (rest) {
+      const inner = parseCellValueV2(rest);
+      if (inner.type === "student" || inner.type === "multi_student") {
+        return { ...inner, category: inner.category ?? category, raw: trimmed };
+      }
+    }
   }
 
   // Два ученика: "Малика+Асанали", "Жансая+Ерхан", но НЕ "X+Y-" (отменённый)
@@ -1140,6 +1216,34 @@ function matchStudentByAbbreviation(
   );
   if (byPartialFirst.length === 1) return byPartialFirst[0];
 
+  // Перевёрнутое сокращение: «АбдумаликШ» при записи в базе Имя=Шакар,
+  // Фамилия=Абдумалик. В файлах Дархана колонки местами путаются.
+  for (let i = 2; i < normalized.length; i++) {
+    const firstPart = normalized.slice(0, i).toLowerCase();
+    const lastPart = normalized.slice(i).toLowerCase();
+    if (!lastPart) continue;
+    const reversed = students.filter((s) => {
+      const fn = s.firstName.toLowerCase();
+      const ln = s.lastName.toLowerCase();
+      return ln.startsWith(firstPart) && fn.startsWith(lastPart);
+    });
+    if (reversed.length === 1) return reversed[0];
+  }
+
+  // Разное написание имени: «Даниил»/«Данила», «Музаффар»/«Музафар».
+  // Одна опечатка, единственный кандидат — иначе не трогаем.
+  for (let i = 2; i < normalized.length; i++) {
+    const firstPart = normalized.slice(0, i).toLowerCase();
+    const lastPart = normalized.slice(i).toLowerCase();
+    if (!lastPart || firstPart.length < 4) continue;
+    const fuzzy = students.filter((s) => {
+      const fn = s.firstName.toLowerCase();
+      const ln = s.lastName.toLowerCase();
+      return ln.startsWith(lastPart) && levenshtein(fn, firstPart) <= 1;
+    });
+    if (fuzzy.length === 1) return fuzzy[0];
+  }
+
   return null;
 }
 
@@ -1147,16 +1251,49 @@ function matchStudentByAbbreviation(
 
 function matchGroupFuzzy(
   name: string,
-  groups: GroupRecord[]
+  groups: GroupRecord[],
+  dayGroup?: "mwf" | "tt" | "sat",
 ): GroupRecord | null {
   if (!name) return null;
 
+  // Дни и время в запросе мешают: «гршк6 АФК чт» → «гршк6АФК».
+  // В названиях групп дни тоже есть («ГРШК 6 пн ср пт»), поэтому ниже они
+  // используются как подсказка, а не как часть имени.
+  // Границу слова \b использовать нельзя: в JavaScript она считает кириллицу
+  // не-буквой, и «мно2 пн» осталось бы с днём. Поэтому границы задаём явно.
+  const stripDays = (s: string) =>
+    s
+      .replace(/(^|[\s,.\-])(?:пн|вт|ср|чт|пт)(?=$|[\s,.\-])/gi, "$1")
+      .replace(/(^|[\s,.\-])(?:утро|обед|вечер)(?=$|[\s,.\-])/gi, "$1")
+      .replace(/\d{1,2}[:\-.]\d{2}/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
   // Нормализация: убираем пробелы, lowercase
-  const norm = name.toLowerCase().replace(/\s+/g, "");
+  const norm = stripDays(name).toLowerCase().replace(/\s+/g, "");
 
   // Пары без названия (groupType=PAIR) исключаем — их матчим не по имени
   const named = groups.filter((g) => !!g.name && g.name.trim().length > 0);
-  const norm2 = (g: GroupRecord) => (g.name ?? "").toLowerCase().replace(/\s+/g, "");
+  const norm2 = (g: GroupRecord) => stripDays(g.name ?? "").toLowerCase().replace(/\s+/g, "");
+
+  // Дни в названии группы: «ГРШК 6 пн ср пт» → mwf. Нужны, чтобы выбрать
+  // между «ГРШК 6 пн ср пт» и «ГРШК 6 АФК вт чт», когда в ячейке просто «шк6».
+  const daysOfName = (g: GroupRecord): "mwf" | "tt" | null => {
+    const n = (g.name ?? "").toLowerCase();
+    const hasMwf = /пн|ср|пт/.test(n);
+    const hasTt = /вт|чт/.test(n);
+    if (hasMwf && !hasTt) return "mwf";
+    if (hasTt && !hasMwf) return "tt";
+    return null;
+  };
+  const pickByDay = (list: GroupRecord[]): GroupRecord | null => {
+    if (list.length === 1) return list[0];
+    if (list.length > 1 && dayGroup) {
+      const sameDay = list.filter((g) => daysOfName(g) === dayGroup);
+      if (sameDay.length === 1) return sameDay[0];
+    }
+    return null;
+  };
 
   // Точное совпадение (нормализованное)
   const exact = named.find((g) => norm2(g) === norm);
@@ -1172,19 +1309,22 @@ function matchGroupFuzzy(
     : null;
   if (withoutPrefix) return withoutPrefix;
 
-  // Содержит / содержится
-  const contains = named.filter((g) => {
-    const gNorm = norm2(g);
-    return gNorm.includes(norm) || norm.includes(gNorm);
-  });
-  if (contains.length === 1) return contains[0];
+  // Название группы содержит запрос («грМНО ОНР 1 утро» ⊃ «мноонр1») —
+  // это точнее обратного случая, поэтому проверяем первым.
+  const nameContainsQuery = pickByDay(named.filter((g) => norm2(g).includes(norm)));
+  if (nameContainsQuery) return nameContainsQuery;
 
-  // Попробовать с/без "гр" в contains
-  const containsWithGr = named.filter((g) => {
-    const gNorm = norm2(g);
-    return gNorm.includes("гр" + norm) || ("гр" + norm).includes(gNorm);
-  });
-  if (containsWithGr.length === 1) return containsWithGr[0];
+  const queryContainsName = pickByDay(named.filter((g) => norm.includes(norm2(g))));
+  if (queryContainsName) return queryContainsName;
+
+  // Попробовать с/без "гр"
+  const withGr = pickByDay(
+    named.filter((g) => {
+      const gNorm = norm2(g);
+      return gNorm.includes("гр" + norm) || ("гр" + norm).includes(gNorm);
+    }),
+  );
+  if (withGr) return withGr;
 
   return null;
 }
@@ -1253,6 +1393,36 @@ function extractGridCellsV2(grid: string[][]): {
   };
 }
 
+// Запасные написания имени, когда прямой матч не сработал. Возвращает пары
+// «имя без хвоста» + «что это был за хвост» — хвост уходит в категорию.
+// Применяется ТОЛЬКО как фоллбэк: если вариант находит ученика, значит угадали.
+function alternativeNamesV2(name: string): { name: string; category: string | null }[] {
+  const out: { name: string; category: string | null }[] = [];
+  const trimmed = name.trim();
+
+  // Слипшаяся категория: «АрсланМТЕХ» → «АрсланМ» + ТЕХ, «РамзанаАИ» → «РамзанаА» + И
+  const gluedTeh = trimmed.match(/^(.+?)(ТЕХ|ЛОГ|АФК|МНО)$/i);
+  if (gluedTeh && gluedTeh[1].length >= 3) {
+    out.push({ name: gluedTeh[1], category: gluedTeh[2].toUpperCase() });
+  }
+  const gluedLetter = trimmed.match(/^(.+[А-ЯЁ])([ИА])$/);
+  if (gluedLetter && gluedLetter[1].length >= 3) {
+    out.push({ name: gluedLetter[1], category: gluedLetter[2] });
+  }
+
+  // Незнакомый короткий хвост через пробел: «ЕркебуланЕ ТД», «СамираА РиЛ».
+  // Категорию сохраняем как есть — пусть Дархан увидит её в расписании.
+  const words = trimmed.split(/\s+/);
+  if (words.length >= 2) {
+    const last = words[words.length - 1].replace(/\.+$/, "");
+    if (last.length <= 4 && /^[А-Яа-яЁё]+$/.test(last)) {
+      out.push({ name: words.slice(0, -1).join(" "), category: last.toUpperCase() });
+    }
+  }
+
+  return out;
+}
+
 // --- V2: Матчинг одной ячейки ---
 
 function matchSingleCellV2(
@@ -1300,7 +1470,7 @@ function matchSingleCellV2(
       : "Стажировка";
     lessonCategory = "Стажировка";
   } else if (parsed.type === "group" || parsed.type === "support_group") {
-    const group = matchGroupFuzzy(parsed.groupName!, groups);
+    const group = matchGroupFuzzy(parsed.groupName!, groups, cell.dayGroup);
     if (group) {
       groupId = group.id;
       lessonType = "GROUP";
@@ -1336,10 +1506,40 @@ function matchSingleCellV2(
         lessonType = "INDIVIDUAL";
         studentOrGroupLabel = `${abbrMatch.lastName} ${abbrMatch.firstName}`;
       } else {
-        errors.push(`Не найден: "${cell.cellValue}"`);
+        // Фоллбэк 2: слипшаяся или незнакомая категория в хвосте имени
+        let salvaged = false;
+        for (const alt of alternativeNamesV2(studentName)) {
+          // Хвостов может быть два («АхмадН И РЖ» → «АхмадН И» → «АхмадН»),
+          // поэтому укороченное имя прогоняем через разбор ещё раз.
+          const reparsed = parseCellValueV2(alt.name);
+          if (reparsed.type === "student" && reparsed.names[0]) {
+            alt.name = reparsed.names[0];
+          }
+          const altMatch =
+            matchStudentByAbbreviation(alt.name, students) ??
+            (() => {
+              const m = matchStudentOrGroup(alt.name, students, groups);
+              return m?.type === "student"
+                ? students.find((s) => s.id === m.id) ?? null
+                : null;
+            })();
+          if (!altMatch) continue;
+          studentId = altMatch.id;
+          lessonType = "INDIVIDUAL";
+          studentOrGroupLabel = `${altMatch.lastName} ${altMatch.firstName}`;
+          if (!lessonCategory) lessonCategory = alt.category;
+          salvaged = true;
+          break;
+        }
+        if (!salvaged) errors.push(`Не найден: "${cell.cellValue}"`);
       }
     }
   }
+
+  // Дни из ячейки ограничиваем днями колонки: «вт» в колонке Пн/Ср/Пт — описка,
+  // такую ячейку ставим на все дни колонки, а не в чужой день.
+  const columnDays = DAY_GROUPS_V2[cell.dayGroup] ?? [];
+  const cellDays = parsed.dayOverride?.filter((d) => columnDays.includes(d)) ?? [];
 
   return {
     cell,
@@ -1354,8 +1554,12 @@ function matchSingleCellV2(
     errors,
     dayGroup: cell.dayGroup,
     room: cell.room,
+    days: cellDays.length > 0 ? cellDays : undefined,
   };
 }
+
+// Дни колонок многоблочного формата — те же, что на вкладках расписания.
+const DAY_GROUPS_V2: Record<string, number[]> = { mwf: [1, 3, 5], tt: [2, 4], sat: [6] };
 
 // --- V2: Главная функция матчинга ---
 
