@@ -12,6 +12,36 @@ import {
 } from "@/lib/import-utils";
 import type { ImportPreviewV2, MatchedRowV2 } from "@/lib/import-utils";
 
+// Ищет существующую пару с ровно этими двумя детьми у этого педагога, иначе создаёт.
+// Та же логика, что в confirm-роуте: без неё прямой импорт создавал занятие-пару
+// вообще без участников.
+async function getOrCreatePairGroup(
+  teacherId: string,
+  studentIds: string[],
+): Promise<string | null> {
+  if (studentIds.length !== 2) return null;
+  const want = [...studentIds].sort();
+
+  const candidates = await prisma.group.findMany({
+    where: { teacherId, groupType: "PAIR" },
+    include: { members: true },
+  });
+  for (const g of candidates) {
+    const ids = g.members.map((m) => m.studentId).sort();
+    if (ids.length === 2 && ids[0] === want[0] && ids[1] === want[1]) return g.id;
+  }
+
+  const created = await prisma.group.create({
+    data: {
+      teacherId,
+      groupType: "PAIR",
+      name: null,
+      members: { createMany: { data: studentIds.map((studentId) => ({ studentId })) } },
+    },
+  });
+  return created.id;
+}
+
 // POST /api/schedule/import
 // Body: { sheetUrl, weekStart, dayGroup?: "mwf"|"tt", preview?: boolean }
 export async function POST(request: NextRequest) {
@@ -221,6 +251,12 @@ export async function POST(request: NextRequest) {
       // Ячейка могла указать конкретные дни: «РамзанаА И пн» — только понедельник.
       const days = matchV2.days ?? dg?.days ?? [];
 
+      // Пара из ячейки «X+Y»: собираем группу, иначе занятие останется без участников
+      if (match.lessonType === "PAIR" && !match.groupId && match.pairStudentIds?.length === 2) {
+        match.groupId =
+          (await getOrCreatePairGroup(match.teacherId!, match.pairStudentIds)) ?? undefined;
+      }
+
       for (const dayOfWeek of days) {
         const teacherConflict = await prisma.scheduleSlot.findFirst({
           where: {
@@ -277,7 +313,7 @@ export async function POST(request: NextRequest) {
               startTime: match.startTime!,
               endTime: getEndTime(match.startTime!),
               weekStartDate: weekStart,
-              lessonType: match.lessonType!,
+              lessonType: match.lessonType === "PAIR" ? "GROUP" : match.lessonType!,
               lessonCategory: match.lessonCategory ?? null,
               room: matchV2.room ?? null,
             },
