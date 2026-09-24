@@ -1182,7 +1182,22 @@ function matchStudentByAbbreviation(
   );
   if (byFirstName.length === 1) return byFirstName[0];
 
-  // Разбиение: "МаркВ" → first="Марк", last starts with "В"
+  // Разбиение: "МаркВ" → first="Марк", last starts with "В".
+  // Сначала требуем точное совпадение имени: «АлиК» — это Али Касым, а не
+  // Алихан Курмангазин, хотя «Алихан» тоже начинается на «Али».
+  for (let i = 2; i < normalized.length; i++) {
+    const firstPart = normalized.slice(0, i).toLowerCase();
+    const lastPart = normalized.slice(i).toLowerCase();
+    if (!lastPart) continue;
+
+    const exactFirst = students.filter((s) => {
+      const fn = s.firstName.toLowerCase();
+      const ln = s.lastName.toLowerCase();
+      return fn === firstPart && ln.startsWith(lastPart);
+    });
+    if (exactFirst.length === 1) return exactFirst[0];
+  }
+
   for (let i = 2; i < normalized.length; i++) {
     const firstPart = normalized.slice(0, i).toLowerCase();
     const lastPart = normalized.slice(i).toLowerCase();
