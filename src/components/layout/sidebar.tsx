@@ -19,6 +19,7 @@ const navigation: NavItem[] = [
   { name: "Ученики", href: "/students", icon: "👨‍🎓" },
   { name: "Группы", href: "/groups", icon: "👥" },
   { name: "Услуги", href: "/services", icon: "🏷️", roles: ["ADMIN", "DIRECTOR"] },
+  { name: "Цены детей", href: "/prices", icon: "💵", roles: ["ADMIN", "DIRECTOR"] },
   { name: "Расписание", href: "/schedule", icon: "📅" },
   { name: "Посещаемость", href: "/attendance", icon: "✅" },
   { name: "Журнал замен", href: "/substitutions", icon: "🔄" },
